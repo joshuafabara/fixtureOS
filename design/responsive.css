@@ -1,0 +1,83 @@
+/* ===========================================================
+   fixtureOS — Responsive / mobile-first layer
+   Inline styles drive desktop; these rules adapt down.
+   =========================================================== */
+
+/* Thin, touch-friendly scrollbars on horizontal table scrollers */
+.fos .tbl-scroll { scrollbar-width: thin; }
+.fos .tbl-scroll::-webkit-scrollbar { height: 8px; }
+.fos .tbl-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 99px; }
+.fos .tbl-scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* Screen content padding scales down on smaller viewports */
+.fos .screen-pad { padding: 22px 26px 40px; }
+
+/* Page header: allow wrap so titles + actions never overflow */
+.fos .page-head { flex-wrap: wrap; }
+.fos .page-title { white-space: normal; text-wrap: balance; }
+
+/* ---------- Tablet ---------- */
+@media (max-width: 1080px) {
+  .fos .screen-pad { padding: 20px 20px 40px; }
+}
+
+/* ---------- Mobile ---------- */
+@media (max-width: 760px) {
+  .fos .screen-pad { padding: 16px 14px 48px; }
+
+  /* Page header stacks: title block over a full-width action row */
+  .fos .page-head { align-items: flex-start; gap: 14px; }
+  .fos .page-head > .page-actions { width: 100%; flex-wrap: wrap; }
+  .fos .page-title { font-size: 22px !important; letter-spacing: -.5px !important; }
+
+  /* Cards lose heavy inner padding */
+  .fos .card-pad-lg { padding: 16px !important; }
+
+  /* Buttons in action rows can grow to fill */
+  .fos .page-actions > button { flex: 1 1 auto; justify-content: center; }
+}
+
+/* ---------- Mobile drawer scrim ---------- */
+.fos .drawer-scrim {
+  position: fixed; inset: 0; background: rgba(8,12,22,.5);
+  z-index: 60; backdrop-filter: blur(2px);
+  animation: fos-fade .18s ease;
+}
+@keyframes fos-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fos-slide-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+
+/* Hide desktop-only / mobile-only helpers */
+@media (max-width: 760px) { .fos .hide-mobile { display: none !important; } }
+@media (min-width: 761px) { .fos .only-mobile { display: none !important; } }
+
+/* Dry-run before/after stacks vertically on mobile */
+@media (max-width: 760px) {
+  .fos .diff-ba { flex-direction: column; align-items: stretch !important; }
+  .fos .diff-ba .diff-arrow { padding: 4px 0 !important; }
+  .fos .diff-ba .diff-arrow > div { transform: rotate(90deg); }
+}
+
+/* ---------- Data tables → stacked cards on mobile (no horizontal scroll) ----------
+   Every <TableScroll> wraps a header row (first child) + data rows. On phones we
+   hide the header and let each row's cells stack vertically into a card. */
+@media (max-width: 760px) {
+  .fos .tbl-scroll { overflow-x: visible; }
+  .fos .tbl-stack { min-width: 0 !important; }
+  /* header row */
+  .fos .tbl-stack > div:first-child { display: none !important; }
+  /* data rows → vertical card */
+  .fos .tbl-stack > div {
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch !important;
+    grid-template-columns: none !important;
+    gap: 7px;
+    padding: 13px 15px !important;
+  }
+  /* right-aligned action cells align left when stacked */
+  .fos .tbl-stack > div > div[style*="text-align: right"],
+  .fos .tbl-stack > div > div[style*="justify-content: flex-end"] {
+    text-align: left !important;
+    justify-content: flex-start !important;
+  }
+}

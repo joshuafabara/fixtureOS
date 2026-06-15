@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>fixtureOS — Prototipo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="responsive.css" />
+<style>
+  html, body { margin: 0; padding: 0; background: var(--page); }
+  ::selection { background: var(--accent-soft-2); }
+  main::-webkit-scrollbar { width: 11px; }
+  main::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 99px; border: 3px solid var(--page); }
+  main::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="ui.jsx"></script>
+<script type="text/babel" src="shell.jsx"></script>
+<script type="text/babel" src="screen-dashboard.jsx"></script>
+<script type="text/babel" src="screen-tournaments.jsx"></script>
+<script type="text/babel" src="screen-tournament.jsx"></script>
+<script type="text/babel" src="screen-fixture.jsx"></script>
+<script type="text/babel" src="screen-dryrun.jsx"></script>
+<script type="text/babel" src="screen-compare.jsx"></script>
+<script type="text/babel" src="screen-clubs.jsx"></script>
+<script type="text/babel" src="screen-clubdetail.jsx"></script>
+<script type="text/babel" src="screen-manualedit.jsx"></script>
+<script type="text/babel" src="screen-import.jsx"></script>
+<script type="text/babel" src="context-shared.jsx"></script>
+<script type="text/babel" src="screen-context-dashboard.jsx"></script>
+<script type="text/babel" src="screen-context-org.jsx"></script>
+<script type="text/babel" src="screen-context-tournament.jsx"></script>
+<script type="text/babel" src="screen-context-category.jsx"></script>
+<script type="text/babel" src="screen-context-date.jsx"></script>
+<script type="text/babel" src="screen-context-versions.jsx"></script>
+<script type="text/babel" src="screen-builder.jsx"></script>
+<script type="text/babel" src="screen-standings.jsx"></script>
+<script type="text/babel" src="screen-comms.jsx"></script>
+<script type="text/babel" src="screen-settings.jsx"></script>
+<script type="text/babel" src="screen-audit.jsx"></script>
+<script type="text/babel" src="screen-exports.jsx"></script>
+<script type="text/babel" src="screen-login.jsx"></script>
+<script type="text/babel" src="screen-public.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+  const { useState, useEffect } = React;
+
+  const ACCENTS = {
+    naranja: { "--accent": "#ea580c", "--accent-strong": "#c2410c", "--accent-hot": "#f97316", "--accent-soft": "#fff1e9", "--accent-soft-2": "#ffe2d1", "--accent-ink": "#9a3412" },
+    azul:    { "--accent": "#2563eb", "--accent-strong": "#1d4ed8", "--accent-hot": "#3b82f6", "--accent-soft": "#e8efff", "--accent-soft-2": "#cfddff", "--accent-ink": "#1e40af" },
+    violeta: { "--accent": "#7c3aed", "--accent-strong": "#6d28d9", "--accent-hot": "#8b5cf6", "--accent-soft": "#f0e9ff", "--accent-soft-2": "#e0d2ff", "--accent-ink": "#5b21b6" },
+    verde:   { "--accent": "#0d9488", "--accent-strong": "#0f766e", "--accent-hot": "#14b8a6", "--accent-soft": "#dcf6f1", "--accent-soft-2": "#bfeee5", "--accent-ink": "#115e59" },
+  };
+
+  const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+    "dark": false,
+    "accent": "verde",
+    "radius": 10
+  }/*EDITMODE-END*/;
+
+  function App() {
+    const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+    const [route, setRoute] = useState({ screen: "dashboard", params: {} });
+    const nav = React.useCallback((screen, params = {}) => {
+      setRoute({ screen, params });
+      const m = document.querySelector("main"); if (m) m.scrollTo(0, 0);
+    }, []);
+
+    useEffect(() => {
+      const r = document.documentElement;
+      r.setAttribute("data-theme", t.dark ? "dark" : "light");
+      const a = ACCENTS[t.accent] || ACCENTS.naranja;
+      Object.entries(a).forEach(([k, v]) => r.style.setProperty(k, v));
+      r.style.setProperty("--radius", t.radius + "px");
+      r.style.setProperty("--radius-sm", Math.max(5, t.radius - 5) + "px");
+      r.style.setProperty("--radius-lg", (t.radius + 6) + "px");
+    }, [t.dark, t.accent, t.radius]);
+
+    const SCREENS = {
+      dashboard:   () => <DashboardScreen />,
+      tournaments: () => window.TournamentsScreen ? <TournamentsScreen /> : <ScreenStub title="Torneos" icon="trophy" />,
+      tournament:  () => window.TournamentScreen ? <TournamentScreen /> : <ScreenStub title="Detalle de torneo" icon="trophy" />,
+      fixture:     () => window.FixtureScreen ? <FixtureScreen /> : <ScreenStub title="Fixture" icon="layers" />,
+      dryrun:      () => window.DryRunScreen ? <DryRunScreen /> : <ScreenStub title="Revisión de cambios" icon="zap" />,
+      compare:     () => window.CompareScreen ? <CompareScreen /> : <ScreenStub title="Comparar versiones" icon="gitcompare" />,
+      clubs:       () => window.ClubsScreen ? <ClubsScreen /> : <ScreenStub title="Clubes" icon="building" />,
+      clubdetail:  () => window.ClubDetailScreen ? <ClubDetailScreen /> : <ScreenStub title="Detalle de club" icon="building" />,
+      manualedit:  () => window.ManualEditScreen ? <ManualEditScreen /> : <ScreenStub title="Edición manual" icon="edit" />,
+      import:      () => window.ImportScreen ? <ImportScreen /> : <ScreenStub title="Importar datos" icon="upload" />,
+      context:     () => window.ContextScreen ? <ContextScreen /> : <ScreenStub title="Contexto" icon="message" />,
+      context:     () => window.ContextDashboardScreen ? <ContextDashboardScreen /> : <ScreenStub title="Contexto" icon="sliders" />,
+      ctxorg:        () => window.OrgContextScreen ? <OrgContextScreen /> : <ScreenStub title="Contexto de Organización" icon="building" />,
+      ctxtournament: () => window.TournamentContextScreen ? <TournamentContextScreen /> : <ScreenStub title="Contexto de Torneo" icon="trophy" />,
+      ctxcategory:   () => window.CategoryContextScreen ? <CategoryContextScreen /> : <ScreenStub title="Contexto de Categoría" icon="layers" />,
+      ctxdate:       () => window.DateContextScreen ? <DateContextScreen /> : <ScreenStub title="Contexto de Fecha" icon="calendar" />,
+      ctxhistory:    () => window.ContextHistoryScreen ? <ContextHistoryScreen /> : <ScreenStub title="Historial de Contextos" icon="history" />,
+      ctxcompare:    () => window.ContextCompareScreen ? <ContextCompareScreen /> : <ScreenStub title="Comparar Contextos" icon="gitcompare" />,
+      ctximpact:     () => window.ContextImpactScreen ? <ContextImpactScreen /> : <ScreenStub title="Simulador de Impacto" icon="target" />,
+      builder:     () => window.BuilderScreen ? <BuilderScreen /> : <ScreenStub title="Constructor de fixture" icon="zap" />,
+      standings:   () => window.StandingsScreen ? <StandingsScreen /> : <ScreenStub title="Posiciones" icon="list" />,
+      comms:       () => window.CommsScreen ? <CommsScreen /> : <ScreenStub title="Comunicaciones" icon="message" />,
+      settings:    () => window.SettingsScreen ? <SettingsScreen /> : <ScreenStub title="Configuración" icon="settings" />,
+      courts:      () => window.SettingsScreen ? <SettingsScreen initial="courts" /> : <ScreenStub title="Canchas" icon="pin" />,
+      users:       () => window.SettingsScreen ? <SettingsScreen initial="users" /> : <ScreenStub title="Usuarios" icon="users" />,
+      org:         () => window.SettingsScreen ? <SettingsScreen initial="org" /> : <ScreenStub title="Organización" icon="building" />,
+      audit:       () => window.AuditScreen ? <AuditScreen /> : <ScreenStub title="Auditoría" icon="history" />,
+      exports:     () => window.ExportsScreen ? <ExportsScreen /> : <ScreenStub title="Exportes" icon="download" />,
+    };
+    const render = SCREENS[route.screen] || SCREENS.dashboard;
+
+    // Full-bleed screens rendered outside the app shell
+    if (route.screen === "login" && window.LoginScreen) {
+      return (
+        <NavCtx.Provider value={{ screen: route.screen, params: route.params, nav }}>
+          <LoginScreen />
+          <TweaksPanel title="Tweaks">{tweakControls(t, setTweak)}</TweaksPanel>
+        </NavCtx.Provider>
+      );
+    }
+    if (route.screen === "public" && window.PublicScreen) {
+      return (
+        <NavCtx.Provider value={{ screen: route.screen, params: route.params, nav }}>
+          <PublicScreen />
+          <TweaksPanel title="Tweaks">{tweakControls(t, setTweak)}</TweaksPanel>
+        </NavCtx.Provider>
+      );
+    }
+
+    return (
+      <NavCtx.Provider value={{ screen: route.screen, params: route.params, nav }}>
+        <AppShell>
+          {render()}
+        </AppShell>
+        <TweaksPanel title="Tweaks">{tweakControls(t, setTweak)}</TweaksPanel>
+      </NavCtx.Provider>
+    );
+  }
+
+  function tweakControls(t, setTweak) {
+    return (<>
+      <TweakSection label="Tema" />
+      <TweakToggle label="Modo oscuro" value={t.dark} onChange={(v) => setTweak("dark", v)} />
+      <TweakColor label="Color de acento" value={ACCENTS[t.accent]["--accent"]}
+        options={[ACCENTS.naranja["--accent"], ACCENTS.azul["--accent"], ACCENTS.violeta["--accent"], ACCENTS.verde["--accent"]]}
+        onChange={(hex) => {
+          const key = Object.keys(ACCENTS).find((k) => ACCENTS[k]["--accent"] === hex) || "naranja";
+          setTweak("accent", key);
+        }} />
+      <TweakSection label="Forma" />
+      <TweakSlider label="Radio de bordes" value={t.radius} min={4} max={22} unit="px" onChange={(v) => setTweak("radius", v)} />
+    </>);
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
