@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
-import { parseContextPrompt } from "@/lib/context/mock-parser";
+import { parseContextWithAI } from "@/lib/ai/parser";
 import { z } from "zod";
 
 const schema = z.object({
@@ -19,6 +19,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const result = parseContextPrompt(parsed.data.prompt, parsed.data.scope);
+  const result = await parseContextWithAI(parsed.data.prompt, parsed.data.scope);
   return NextResponse.json({ parsed: result });
 }

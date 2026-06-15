@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { AlertTriangle, Loader2, GripVertical, ChevronRight, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, Loader2, GripVertical, ChevronRight, CheckCircle2, Camera, X } from "lucide-react";
 
 type Tournament = { id: string; name: string };
 type Category = { id: string; name: string; colorHex: string | null; tournamentId: string };
@@ -21,6 +21,9 @@ export function StandingsImportWizard({ tournaments, categories, teams }: Props)
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [importId, setImportId] = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractWarnings, setExtractWarnings] = useState<string[]>([]);
 
   const filteredCategories = useMemo(
     () => categories.filter((c) => c.tournamentId === selectedTournamentId),
@@ -35,6 +38,60 @@ export function StandingsImportWizard({ tournaments, categories, teams }: Props)
   function initRows(catId: string) {
     const catTeams = teams.filter((t) => t.categoryId === catId);
     setRows(catTeams.map((t, i) => ({ position: i + 1, teamId: t.id })));
+  }
+
+  async function handleImageExtract() {
+    if (!imageFile || !selectedCategoryId) return;
+    setExtracting(true);
+    setError("");
+    setExtractWarnings([]);
+    try {
+      const fd = new FormData();
+      fd.append("image", imageFile);
+      const res = await fetch("/api/standings/extract-image", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error al procesar imagen");
+
+      const catTeams = teams.filter((t) => t.categoryId === selectedCategoryId);
+
+      // Match extracted team names to known teams (fuzzy: normalize lowercase)
+      const normalize = (s: string) => s.toLowerCase().trim().replace(/\s+/g, " ");
+      const teamByNorm = new Map(catTeams.map((t) => [normalize(t.name), t.id]));
+
+      const matched: RowEntry[] = [];
+      const unmatched: string[] = [];
+
+      for (const r of data.rows ?? []) {
+        const norm = normalize(r.teamName);
+        // Try exact, then partial
+        let teamId = teamByNorm.get(norm);
+        if (!teamId) {
+          for (const [key, id] of teamByNorm.entries()) {
+            if (key.includes(norm) || norm.includes(key)) { teamId = id; break; }
+          }
+        }
+        if (teamId) {
+          matched.push({ position: r.position, teamId });
+        } else {
+          unmatched.push(r.teamName);
+        }
+      }
+
+      if (matched.length > 0) {
+        setRows(matched.sort((a, b) => a.position - b.position));
+      }
+
+      const warnings = [...(data.warnings ?? [])];
+      if (unmatched.length > 0) {
+        warnings.push(`No se encontraron coincidencias para: ${unmatched.join(", ")}. Revisa manualmente.`);
+      }
+      setExtractWarnings(warnings);
+      setImageFile(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error inesperado");
+    } finally {
+      setExtracting(false);
+    }
   }
 
   function moveRow(fromIdx: number, dir: -1 | 1) {
@@ -159,6 +216,46 @@ export function StandingsImportWizard({ tournaments, categories, teams }: Props)
       {/* Step 1: Order teams */}
       {step === 1 && (
         <div className="space-y-3">
+          {/* AI image extraction */}
+          <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-3 space-y-2">
+            <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+              <Camera className="h-3.5 w-3.5" /> Extraer posiciones desde imagen (IA)
+            </p>
+            <p className="text-xs text-muted-foreground">Sube una captura de la tabla de posiciones y el sistema la leerá automáticamente.</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="cursor-pointer">
+                <span className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border bg-background hover:bg-muted transition-colors font-medium">
+                  <Camera className="h-3.5 w-3.5" /> Seleccionar imagen
+                </span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              {imageFile && (
+                <>
+                  <span className="text-xs text-muted-foreground">{imageFile.name}</span>
+                  <Button variant="ghost" size="sm" onClick={() => setImageFile(null)}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button size="sm" onClick={handleImageExtract} disabled={extracting}>
+                    {extracting ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Analizando…</> : "Analizar con IA →"}
+                  </Button>
+                </>
+              )}
+            </div>
+            {extractWarnings.length > 0 && (
+              <div className="space-y-0.5">
+                {extractWarnings.map((w, i) => (
+                  <p key={i} className="text-xs text-amber-600 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />{w}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">
             Ordena los equipos de 1° a {rows.length}° lugar. Usa los botones ↑↓ o reordena seleccionando el equipo en cada posición.
           </p>
