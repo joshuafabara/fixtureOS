@@ -1,12 +1,13 @@
 import { requireOrg } from "@/lib/auth/session";
 import { db } from "@/lib/db";
-import { contextVersions, categories, tournaments, users } from "@/lib/db/schema";
-import { eq, and, desc, count } from "drizzle-orm";
+import { contextVersions, categories, tournaments, users, aiAuditReports, dryRuns } from "@/lib/db/schema";
+import { eq, and, desc } from "drizzle-orm";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Target, Layers, CheckCircle, AlertTriangle, ArrowRight } from "lucide-react";
+import { Target, Layers, CheckCircle, AlertTriangle, ArrowRight, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
+import type { AuditReport } from "@/lib/ai/fixture-auditor";
 
 const SCOPE_LABELS: Record<string, string> = {
   organization: "Organización",
@@ -42,6 +43,22 @@ export default async function ImpactSimulatorPage() {
     .where(eq(contextVersions.organizationId, orgId))
     .orderBy(desc(contextVersions.createdAt))
     .limit(10);
+
+  // Recent AI audit reports
+  const recentAudits = await db
+    .select({
+      id: aiAuditReports.id,
+      status: aiAuditReports.status,
+      confidence: aiAuditReports.confidence,
+      model: aiAuditReports.model,
+      reportJson: aiAuditReports.reportJson,
+      createdAt: aiAuditReports.createdAt,
+      dryRunId: aiAuditReports.dryRunId,
+    })
+    .from(aiAuditReports)
+    .where(eq(aiAuditReports.organizationId, orgId))
+    .orderBy(desc(aiAuditReports.createdAt))
+    .limit(3);
 
   // Eligible categories
   const eligibleCategories = await db
@@ -206,6 +223,54 @@ export default async function ImpactSimulatorPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* AI Audit validation history */}
+      {recentAudits.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Validación IA — últimas auditorías</CardTitle>
+            <p className="text-xs text-muted-foreground">Resultados de auditorías recientes sobre dry runs generados</p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {recentAudits.map((audit) => {
+              const report = audit.reportJson as unknown as AuditReport;
+              const Icon = audit.status === "pass" ? ShieldCheck : audit.status === "warning" ? ShieldAlert : ShieldX;
+              const iconColor = audit.status === "pass" ? "text-emerald-600" : audit.status === "warning" ? "text-amber-600" : "text-red-600";
+              const badgeVariant = audit.status === "pass" ? "success" : audit.status === "warning" ? "warning" : "error";
+              const label = audit.status === "pass" ? "Aprobado" : audit.status === "warning" ? "Advertencias" : "Fallido";
+              return (
+                <Link
+                  key={audit.id}
+                  href={`/dry-run/${audit.dryRunId}`}
+                  className="flex items-start gap-3 p-3 rounded-lg hover:bg-accent transition-colors border"
+                >
+                  <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${iconColor}`} />
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant={badgeVariant as "success" | "warning" | "error"} className="text-xs">{label}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {Math.round((audit.confidence ?? 0) * 100)}% confianza
+                      </span>
+                      <span className="text-xs text-muted-foreground">·</span>
+                      <span className="text-xs text-muted-foreground font-mono">{audit.model}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-1">{report.summary_es}</p>
+                    {report.violations?.length > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {report.violations.filter((v) => v.severity === "error").length} error(es) ·{" "}
+                        {report.violations.filter((v) => v.severity === "warning").length} advertencia(s)
+                      </p>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {new Date(audit.createdAt).toLocaleDateString("es-EC", { day: "numeric", month: "short" })}
+                  </span>
+                </Link>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
 
       {/* CTA */}
       <Card className="bg-brand-50 dark:bg-brand-900/10 border-brand-200 dark:border-brand-800">

@@ -1,9 +1,10 @@
 import { requireOrg } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import {
-  dryRuns, dryRunChanges, tournaments, teams, categories,
+  dryRuns, dryRunChanges, tournaments, teams, categories, aiAuditReports,
 } from "@/lib/db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import type { AuditReport } from "@/lib/ai/fixture-auditor";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -76,6 +77,15 @@ export default async function DryRunDetailPage({
     .from(categories)
     .where(eq(categories.organizationId, orgId));
   const catMap = new Map(allCategories.map((c) => [c.id, c]));
+
+  // Load most recent AI audit report for this dry run
+  const [latestAudit] = await db
+    .select()
+    .from(aiAuditReports)
+    .where(and(eq(aiAuditReports.dryRunId, dryRun.id), eq(aiAuditReports.organizationId, orgId)))
+    .orderBy(desc(aiAuditReports.createdAt))
+    .limit(1);
+  const initialAuditReport = (latestAudit?.reportJson ?? null) as AuditReport | null;
 
   const addChanges = changes.filter((c) => c.changeType === "add");
   const conflictChanges = changes.filter((c) => c.changeType === "conflict");
@@ -324,6 +334,7 @@ export default async function DryRunDetailPage({
                   status={dryRun.status}
                   hasConflicts={hasConflicts}
                   totalChanges={addChanges.length}
+                  initialAuditReport={initialAuditReport}
                 />
               </CardContent>
             </Card>

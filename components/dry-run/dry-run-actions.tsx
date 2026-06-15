@@ -2,24 +2,39 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Check, X, AlertTriangle, CheckCircle, Lock } from "lucide-react";
+import { Check, X, AlertTriangle, CheckCircle, Lock, ShieldAlert } from "lucide-react";
+import { AuditPanel } from "@/components/dry-run/audit-panel";
+import { canApproveWithAudit, type AuditReport } from "@/lib/ai/fixture-auditor";
 
 type Props = {
   dryRunId: string;
   status: string;
   hasConflicts: boolean;
   totalChanges: number;
+  initialAuditReport?: AuditReport | null;
 };
 
-export function DryRunActions({ dryRunId, status, hasConflicts, totalChanges }: Props) {
+export function DryRunActions({
+  dryRunId,
+  status,
+  hasConflicts,
+  totalChanges,
+  initialAuditReport = null,
+}: Props) {
   const router = useRouter();
+  const [auditReport, setAuditReport] = useState<AuditReport | null>(initialAuditReport);
+  const [auditWarningOverride, setAuditWarningOverride] = useState(false);
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [done, setDone] = useState<{ versionNumber: number; matchesCreated: number } | null>(null);
   const [error, setError] = useState("");
 
   const isReady = status === "ready";
-  const canApprove = isReady && !hasConflicts;
+  const auditOk = canApproveWithAudit(auditReport, auditWarningOverride);
+  const canApprove = isReady && !hasConflicts && auditOk;
+
+  const auditBlocked = auditReport?.status === "fail";
+  const auditWarningOnly = auditReport?.status === "warning";
 
   async function handleApprove() {
     if (!canApprove) return;
@@ -78,7 +93,31 @@ export function DryRunActions({ dryRunId, status, hasConflicts, totalChanges }: 
 
   return (
     <div className="space-y-4">
-      {/* Gate banner */}
+      {/* AI Audit panel */}
+      <AuditPanel
+        dryRunId={dryRunId}
+        initialReport={initialAuditReport}
+        onReportChange={setAuditReport}
+      />
+
+      {/* Warning override confirmation */}
+      {auditWarningOnly && !auditWarningOverride && (
+        <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 text-xs">
+          <ShieldAlert className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex-1 space-y-1.5">
+            <p className="font-semibold text-amber-700 dark:text-amber-400">Advertencias pendientes de confirmación</p>
+            <p className="text-muted-foreground">El auditor detectó advertencias. Puedes continuar bajo tu responsabilidad.</p>
+            <button
+              className="text-amber-700 dark:text-amber-400 font-bold underline hover:no-underline"
+              onClick={() => setAuditWarningOverride(true)}
+            >
+              Aceptar advertencias y continuar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Conflict / clean gate banner */}
       <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${
         hasConflicts
           ? "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800"
@@ -91,7 +130,7 @@ export function DryRunActions({ dryRunId, status, hasConflicts, totalChanges }: 
           <p className={`font-bold text-sm ${hasConflicts ? "text-red-700 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`}>
             {hasConflicts
               ? "Aprobación bloqueada · hay conflictos sin resolver"
-              : "Listo para aprobar · sin conflictos"}
+              : "Sin conflictos de programación"}
           </p>
           <p className="text-xs text-muted-foreground mt-0.5">
             {hasConflicts
@@ -122,7 +161,12 @@ export function DryRunActions({ dryRunId, status, hasConflicts, totalChanges }: 
           onClick={handleApprove}
           disabled={!canApprove || approving}
           className="flex-1"
-          title={hasConflicts ? "Resuelve los conflictos primero" : ""}
+          title={
+            hasConflicts ? "Resuelve los conflictos primero"
+            : auditBlocked ? "La auditoría IA bloqueó la aprobación"
+            : auditWarningOnly && !auditWarningOverride ? "Acepta las advertencias de IA primero"
+            : ""
+          }
         >
           <Check className="h-4 w-4" />
           {approving ? "Aprobando..." : "Aprobar y crear versión"}

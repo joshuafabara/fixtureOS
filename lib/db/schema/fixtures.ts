@@ -8,6 +8,7 @@ import {
   time,
   integer,
   jsonb,
+  real,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { organizations, users } from "./auth";
@@ -139,6 +140,22 @@ export const dryRunChanges = pgTable("dry_run_changes", {
   explanation: text("explanation"),
 });
 
+export const aiAuditReports = pgTable("ai_audit_reports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  dryRunId: uuid("dry_run_id")
+    .notNull()
+    .references(() => dryRuns.id, { onDelete: "cascade" }),
+  status: text("status").notNull(), // pass | warning | fail
+  confidence: real("confidence"), // 0–1
+  model: text("model").notNull(),
+  inputHash: text("input_hash").notNull(),
+  reportJson: jsonb("report_json").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Relations
 export const fixtureVersionsRelations = relations(
   fixtureVersions,
@@ -191,4 +208,16 @@ export const dryRunsRelations = relations(dryRuns, ({ one, many }) => ({
     references: [tournaments.id],
   }),
   changes: many(dryRunChanges),
+  auditReports: many(aiAuditReports),
+}));
+
+export const aiAuditReportsRelations = relations(aiAuditReports, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [aiAuditReports.organizationId],
+    references: [organizations.id],
+  }),
+  dryRun: one(dryRuns, {
+    fields: [aiAuditReports.dryRunId],
+    references: [dryRuns.id],
+  }),
 }));
