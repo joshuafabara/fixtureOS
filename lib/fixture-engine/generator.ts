@@ -8,14 +8,17 @@ import {
   categories, teams, courts, courtAvailabilityRules, gameModes,
   contextVersions, dryRuns, dryRunChanges, tournaments,
 } from "@/lib/db/schema";
-import { eq, and, count, desc } from "drizzle-orm";
+import { eq, and, count, desc, inArray } from "drizzle-orm";
 import { validateAllCategories } from "./eligibility";
 import { generateSlotsForDateRange, dayNameToNumber, addWeeks, type AvailabilityRule } from "./slots";
-import { scheduleMatches, type SchedulerCategory } from "./scheduler";
+import { scheduleMatches, type SchedulerCategory, type TeamTimeConstraint } from "./scheduler";
 import { detectCourtOverlaps, detectTeamOverlaps, type ScheduledMatch } from "./conflicts";
 
 const DEFAULT_MATCH_DURATION = 60;
 const DEFAULT_WEEKS_AHEAD = 10;
+// Fine-grained slot grid so any match duration (60m, 75m, 90m) can be scheduled
+// without court overlaps. Matches block all 15-min sub-slots they occupy.
+const SLOT_GRID_MINUTES = 15;
 
 export type GeneratorOptions = {
   weeksAhead?: number;
@@ -82,9 +85,9 @@ export async function generateFixtureDryRun(
     eligibilityResults.filter((r) => r.eligible).map((r) => r.categoryId)
   );
 
-  // 4. Load teams for eligible categories
+  // 4. Load teams for eligible categories (include name for constraint matching)
   const eligibleTeams = await db
-    .select({ id: teams.id, categoryId: teams.categoryId, clubId: teams.clubId })
+    .select({ id: teams.id, name: teams.name, categoryId: teams.categoryId, clubId: teams.clubId })
     .from(teams)
     .where(and(eq(teams.organizationId, orgId), eq(teams.status, "active")));
 
@@ -106,20 +109,58 @@ export async function generateFixtureDryRun(
     if (gm.categoryId) gameModeMap.set(gm.categoryId, gm.modeJson as Record<string, unknown>);
   }
 
-  // 6. Load org context for constraints
-  const [orgContext] = await db
-    .select()
-    .from(contextVersions)
-    .where(and(eq(contextVersions.organizationId, orgId), eq(contextVersions.scope, "organization")))
-    .orderBy(desc(contextVersions.versionNumber))
-    .limit(1);
+  // 6. Load all context versions at once (org, tournament, category)
+  const eligibleCatIdList = [...eligibleCatIds];
 
-  const orgConstraints = (orgContext?.parsedConstraints ?? {}) as Record<string, unknown>;
+  const allContextRows = await db
+    .select({
+      scope: contextVersions.scope,
+      scopeId: contextVersions.scopeId,
+      parsedConstraints: contextVersions.parsedConstraints,
+      versionNumber: contextVersions.versionNumber,
+    })
+    .from(contextVersions)
+    .where(eq(contextVersions.organizationId, orgId))
+    .orderBy(desc(contextVersions.versionNumber));
+
+  // Latest org context
+  const orgContextRow = allContextRows.find((r) => r.scope === "organization");
+  const orgConstraints = (orgContextRow?.parsedConstraints ?? {}) as Record<string, unknown>;
+
+  // Latest tournament context
+  const tournamentContextRow = allContextRows.find(
+    (r) => r.scope === "tournament" && r.scopeId === tournamentId
+  );
+  const tournamentConstraints = (tournamentContextRow?.parsedConstraints ?? {}) as Record<string, unknown>;
+
+  // Latest category context per category (keep first = highest version due to desc order)
+  const catConstraintsMap = new Map<string, Record<string, unknown>>();
+  for (const row of allContextRows) {
+    if (
+      row.scope === "category" &&
+      row.scopeId &&
+      eligibleCatIdList.includes(row.scopeId) &&
+      !catConstraintsMap.has(row.scopeId)
+    ) {
+      catConstraintsMap.set(row.scopeId, (row.parsedConstraints ?? {}) as Record<string, unknown>);
+    }
+  }
+
+  // Org-level scheduling params (these drive the slot grid)
   const matchDuration =
     (orgConstraints.defaultMatchDurationMinutes as number | undefined) ?? DEFAULT_MATCH_DURATION;
   const playDayNames = (orgConstraints.playDays as string[] | undefined) ?? ["friday", "saturday", "sunday"];
   const playDayNumbers = playDayNames.map(dayNameToNumber).filter((d) => d >= 0);
   const clubGrouping = (orgConstraints.clubGrouping as { enabled?: boolean } | undefined)?.enabled ?? false;
+
+  // Collect timeRestrictions from org + tournament level (category-level merged per-category below)
+  type TimeRestriction = { target: string; afterTime: string };
+  const orgTimeRestrictions = (orgConstraints.timeRestrictions as TimeRestriction[] | undefined) ?? [];
+  const tournamentTimeRestrictions = (tournamentConstraints.timeRestrictions as TimeRestriction[] | undefined) ?? [];
+
+  // org-wide minDaysBetweenMatches (can be overridden per tournament/category)
+  const orgMinDays = orgConstraints.minDaysBetweenMatches as number | undefined;
+  const tournamentMinDays = tournamentConstraints.minDaysBetweenMatches as number | undefined;
 
   // 7. Load courts + availability rules
   const orgCourts = await db
@@ -147,13 +188,15 @@ export async function generateFixtureDryRun(
   const earliestStart = catStartDates.sort()[0] ?? new Date().toISOString().slice(0, 10);
   const endDate = addWeeks(earliestStart, weeksAhead);
 
-  // 9. Generate slots
+  // 9. Generate slots at fine grid resolution so any match duration is handled correctly.
+  // The scheduler blocks all 15-min sub-slots a match occupies (using category duration),
+  // so courts never double-book regardless of whether categories use 60m, 75m, or 90m.
   const slots = generateSlotsForDateRange(
     earliestStart,
     endDate,
     orgCourts,
     availRules as AvailabilityRule[],
-    matchDuration,
+    SLOT_GRID_MINUTES,
     playDayNumbers
   );
 
@@ -168,13 +211,58 @@ export async function generateFixtureDryRun(
     const gm = gameModeMap.get(catId);
     const gameModeType = (gm?.type as string | undefined) ?? "single_round_robin";
 
+    // Merge constraints: org → tournament → category (category wins for scalars)
+    const catConstraints = catConstraintsMap.get(catId);
+    const catDuration =
+      (catConstraints?.matchDurationMinutes as number | undefined) ??
+      ((catConstraints?.matchDurationByPhase as Record<string, number> | undefined)?.regular) ??
+      (tournamentConstraints.matchDurationMinutes as number | undefined) ??
+      matchDuration;
+
+    // minDaysBetweenMatches: category > tournament > org
+    const minDaysBetweenMatches =
+      (catConstraints?.minDaysBetweenMatches as number | undefined) ??
+      tournamentMinDays ??
+      orgMinDays;
+
+    // Merge timeRestrictions from all three levels (additive — all apply)
+    const catTimeRestrictions = (catConstraints?.timeRestrictions as TimeRestriction[] | undefined) ?? [];
+    const allTimeRestrictions = [...orgTimeRestrictions, ...tournamentTimeRestrictions, ...catTimeRestrictions];
+
+    // Resolve restriction targets to team IDs via case-insensitive name match
+    const teamTimeConstraints: TeamTimeConstraint[] = [];
+    if (allTimeRestrictions.length > 0) {
+      for (const team of catTeams) {
+        let strictestAfter: string | null = null;
+        let strictestBefore: string | null = null;
+        for (const restriction of allTimeRestrictions) {
+          if (team.name.toLowerCase().includes(restriction.target.toLowerCase())) {
+            const af = restriction.afterTime as string | undefined;
+            const bf = restriction.beforeTime as string | undefined;
+            if (af && (!strictestAfter || af > strictestAfter)) strictestAfter = af;
+            // strictest beforeTime = earliest deadline
+            if (bf && (!strictestBefore || bf < strictestBefore)) strictestBefore = bf;
+          }
+        }
+        if (strictestAfter || strictestBefore) {
+          teamTimeConstraints.push({
+            teamId: team.id,
+            afterTime: strictestAfter ?? undefined,
+            beforeTime: strictestBefore ?? undefined,
+          });
+        }
+      }
+    }
+
     schedulerCategories.push({
       id: catId,
       name: cat.name,
       startDate: cat.startDate,
       gameModeType,
       teams: catTeams.map((t) => ({ id: t.id, clubId: t.clubId })),
-      matchDurationMinutes: matchDuration,
+      matchDurationMinutes: catDuration,
+      teamTimeConstraints: teamTimeConstraints.length > 0 ? teamTimeConstraints : undefined,
+      minDaysBetweenMatches,
     });
   }
 

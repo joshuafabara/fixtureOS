@@ -19,6 +19,12 @@ export type SchedulerTeam = {
   clubId: string | null;
 };
 
+export type TeamTimeConstraint = {
+  teamId: string;
+  afterTime?: string;  // HH:MM — team cannot start before this time
+  beforeTime?: string; // HH:MM — team must start before this time
+};
+
 export type SchedulerCategory = {
   id: string;
   name: string;
@@ -27,6 +33,8 @@ export type SchedulerCategory = {
   teams: SchedulerTeam[];
   matchDurationMinutes?: number;
   priority?: number; // higher = scheduled earlier
+  teamTimeConstraints?: TeamTimeConstraint[]; // per-team earliest-start-time restrictions
+  minDaysBetweenMatches?: number; // minimum calendar days between any two matches for same team
 };
 
 export type ScheduledMatchResult = {
@@ -58,14 +66,31 @@ export type ScheduleResult = {
   }>;
 };
 
+const SLOT_GRID = 15; // minutes — must match generator's SLOT_GRID_MINUTES
+
+function toMinutes(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+function fromMinutes(m: number): string {
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/** Calendar days between two YYYY-MM-DD strings (always positive). */
+function daysBetween(a: string, b: string): number {
+  return Math.abs(
+    (new Date(b).getTime() - new Date(a).getTime()) / (1000 * 60 * 60 * 24)
+  );
+}
+
 /** Slot key for tracking occupancy: "date|courtId|startTime" */
 function courtSlotKey(s: TimeSlot): string {
   return `${s.date}|${s.courtId}|${s.startTime}`;
 }
 
-/** Team-time key: "teamId|date|startTime" */
+/** Team-date key: "teamId|date" — a team plays at most once per calendar day. */
 function teamSlotKey(teamId: string, s: TimeSlot): string {
-  return `${teamId}|${s.date}|${s.startTime}`;
+  return `${teamId}|${s.date}`;
 }
 
 /** Get match pairs from a category's game mode. */
@@ -114,6 +139,8 @@ export function scheduleMatches(
   // Track occupancy
   const usedCourtSlots = new Set<string>();
   const usedTeamSlots = new Set<string>();
+  // Track last played date per team for min-rest-days enforcement (shared across categories)
+  const teamLastPlayedDate = new Map<string, string>();
 
   // Sort categories by priority descending (higher priority scheduled first)
   const sortedCategories = [...categories].sort(
@@ -139,6 +166,14 @@ export function scheduleMatches(
 
     const { pairs } = getPairs(cat);
 
+    // Build time constraint lookups once per category
+    const afterTimeMap = new Map<string, string>();
+    const beforeTimeMap = new Map<string, string>();
+    for (const tc of cat.teamTimeConstraints ?? []) {
+      if (tc.afterTime) afterTimeMap.set(tc.teamId, tc.afterTime);
+      if (tc.beforeTime) beforeTimeMap.set(tc.teamId, tc.beforeTime);
+    }
+
     for (const pair of pairs) {
       const homeTeam = cat.teams[pair.homeTeamIndex];
       const awayTeam = cat.teams[pair.awayTeamIndex];
@@ -157,22 +192,54 @@ export function scheduleMatches(
         // Respect category start date
         if (slot.date < cat.startDate) continue;
 
-        const cKey = courtSlotKey(slot);
+        // Enforce per-team earliest-start-time restrictions (afterTime)
+        const homeAfterTime = afterTimeMap.get(homeTeam.id);
+        if (homeAfterTime && slot.startTime < homeAfterTime) continue;
+        const awayAfterTime = afterTimeMap.get(awayTeam.id);
+        if (awayAfterTime && slot.startTime < awayAfterTime) continue;
+
+        // Enforce per-team latest-start-time restrictions (beforeTime)
+        const homeBeforeTime = beforeTimeMap.get(homeTeam.id);
+        if (homeBeforeTime && slot.startTime >= homeBeforeTime) continue;
+        const awayBeforeTime = beforeTimeMap.get(awayTeam.id);
+        if (awayBeforeTime && slot.startTime >= awayBeforeTime) continue;
+
+        // Enforce minimum days between matches for same team
+        if (cat.minDaysBetweenMatches) {
+          const minDays = cat.minDaysBetweenMatches;
+          const homeLastDate = teamLastPlayedDate.get(homeTeam.id);
+          if (homeLastDate && daysBetween(homeLastDate, slot.date) < minDays) continue;
+          const awayLastDate = teamLastPlayedDate.get(awayTeam.id);
+          if (awayLastDate && daysBetween(awayLastDate, slot.date) < minDays) continue;
+        }
+
+        const matchDur = cat.matchDurationMinutes ?? 60;
+        const startMin = toMinutes(slot.startTime);
+
+        // Check court is free for the FULL match duration (all 15-min sub-slots)
+        let courtFree = true;
+        for (let t = startMin; t < startMin + matchDur; t += SLOT_GRID) {
+          if (usedCourtSlots.has(`${slot.date}|${slot.courtId}|${fromMinutes(t)}`)) {
+            courtFree = false;
+            break;
+          }
+        }
+
         const hKey = teamSlotKey(homeTeam.id, slot);
         const aKey = teamSlotKey(awayTeam.id, slot);
 
-        if (
-          usedCourtSlots.has(cKey) ||
-          usedTeamSlots.has(hKey) ||
-          usedTeamSlots.has(aKey)
-        ) {
+        if (!courtFree || usedTeamSlots.has(hKey) || usedTeamSlots.has(aKey)) {
           continue;
         }
 
-        // Mark as used
-        usedCourtSlots.add(cKey);
+        // Block all 15-min sub-slots this match occupies on the court
+        for (let t = startMin; t < startMin + matchDur; t += SLOT_GRID) {
+          usedCourtSlots.add(`${slot.date}|${slot.courtId}|${fromMinutes(t)}`);
+        }
         usedTeamSlots.add(hKey);
         usedTeamSlots.add(aKey);
+        teamLastPlayedDate.set(homeTeam.id, slot.date);
+        teamLastPlayedDate.set(awayTeam.id, slot.date);
 
         scheduledMatches.push({
           categoryId: cat.id,
@@ -180,10 +247,10 @@ export function scheduleMatches(
           awayTeamId: awayTeam.id,
           date: slot.date,
           startTime: slot.startTime,
-          endTime: slot.endTime,
+          endTime: fromMinutes(startMin + matchDur), // actual end based on category duration
           courtId: slot.courtId,
           courtName: slot.courtName,
-          phase: pair.roundIndex >= (cat.teams.length - 1) ? "regular" : "regular",
+          phase: "regular",
           roundIndex: pair.roundIndex,
         });
 

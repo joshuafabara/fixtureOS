@@ -21,9 +21,32 @@ Estructura de respuesta:
   "timeWindow": {"start": "HH:MM", "end": "HH:MM"} | null,
   "defaultMatchDurationMinutes": number | null,
   "matchDurationMinutes": number | null,
+  "minDaysBetweenMatches": number | null,
+  "transitionMinutes": number | null,
+  "maxMatchesPerTeamPerDay": number | null,
+  "noGaps": boolean | null,
+  "matchDurationByPhase": {
+    "regular": number | null,
+    "quarterfinal": number | null,
+    "semifinal": number | null,
+    "final": number | null
+  } | null,
+  "phaseTimeWindows": {
+    "regular": {"start": "HH:MM", "end": "HH:MM"} | null,
+    "quarterfinal": {"start": "HH:MM", "end": "HH:MM"} | null,
+    "semifinal": {"start": "HH:MM", "end": "HH:MM"} | null,
+    "final": {"start": "HH:MM", "end": "HH:MM"} | null
+  } | null,
   "clubGrouping": {"enabled": true, "type": "soft" | "hard"} | null,
   "blackoutDates": ["YYYY-MM-DD", ...] | null,
   "startDate": "YYYY-MM-DD" | null,
+  "timeRestrictions": [
+    {
+      "target": "nombre del equipo exacto como aparece en el texto",
+      "afterTime": "HH:MM" | null,
+      "beforeTime": "HH:MM" | null
+    }
+  ] | null,
   "gameMode": {
     "type": "single_round_robin" | "double_round_robin" | "groups" | "playoffs",
     "groups": number | null,
@@ -51,6 +74,49 @@ timeWindow en formato 24h "HH:MM".
 startDate en formato ISO YYYY-MM-DD (año actual si no se menciona: 2026).
 Si algo no está mencionado, usa null, no omitas el campo.
 warnings debe mencionar información ambigua o faltante importante.
+
+REGLAS PARA noGaps:
+• noGaps: true cuando el texto pide que no haya espacios/huecos entre partidos, que los juegos sean consecutivos, o que no queden canchas vacías entre partidos.
+• Ejemplos: "no dejar espacios libres entre juegos" → true. "siempre un juego luego de otro" → true. "partidos consecutivos sin descanso entre canchas" → true.
+• Si no se menciona, usa null (el sistema por defecto ya intenta minimizar huecos).
+
+REGLAS PARA transitionMinutes:
+• Extrae transitionMinutes cuando el texto especifica un margen/buffer de tiempo entre partidos consecutivos en una misma cancha.
+• Ejemplos: "margen mínimo de 10 minutos para transición" → 10. "15 minutos de transición entre partidos" → 15.
+• Si no se menciona, usa null.
+
+REGLAS PARA maxMatchesPerTeamPerDay:
+• Extrae maxMatchesPerTeamPerDay cuando el texto limita cuántos partidos puede jugar un equipo en un mismo día.
+• Ejemplos: "no más de dos partidos en un mismo día" → 2. "máximo 1 partido por jornada" → 1.
+• Si no se menciona, usa null.
+
+REGLAS PARA minDaysBetweenMatches:
+• Extrae minDaysBetweenMatches cuando el texto especifica un mínimo de días de descanso entre partidos de un mismo equipo.
+• Ejemplos: "no más de 1 partido cada 6 días" → 6. "al menos 7 días entre partidos" → 7. "descanso mínimo de 5 días" → 5.
+• "1 partido por semana" → 7. "máximo 1 partido por semana por equipo" → 7.
+• Si el texto no menciona restricción de descanso, usa null.
+
+REGLAS PARA timeRestrictions:
+• Usa timeRestrictions cuando el texto menciona que UN EQUIPO ESPECÍFICO solo puede jugar a partir de cierta hora (afterTime) o que debe jugar antes de cierta hora (beforeTime).
+• afterTime: "Crossover juega solo a partir de las 13:00" → {"target": "Crossover", "afterTime": "13:00", "beforeTime": null}
+• afterTime: "Los Andes no puede jugar antes de las 10am" → {"target": "Los Andes", "afterTime": "10:00", "beforeTime": null}
+• beforeTime: "Crossover debe jugar antes de las 12:00" → {"target": "Crossover", "afterTime": null, "beforeTime": "12:00"}
+• "target" debe ser el nombre del equipo tal como aparece en el texto (sin sufijos de categoría).
+• Horas en formato 24h HH:MM. 1pm = 13:00, 2pm = 14:00, etc.
+• Si múltiples equipos tienen restricciones, incluye un objeto por cada uno en el array.
+
+REGLAS PARA phaseTimeWindows:
+• Usa phaseTimeWindows cuando el texto especifica rangos de horario diferentes por FASE del torneo.
+• Ejemplos: "las finales deben programarse entre las 10:00 y las 20:00" → {"final": {"start": "10:00", "end": "20:00"}}
+• "reservar 17:00-20:00 para U17" → esto es una preferencia de categoría, no phaseTimeWindows. Anótalo en warnings.
+• Si no se especifica, usa null.
+
+REGLAS PARA matchDurationByPhase:
+• Usa matchDurationByPhase cuando el texto especifica DURACIONES DISTINTAS según la fase.
+• Ejemplo: "fase regular 75 min, cuartos 75 min, semifinal y final 90 min" →
+  {"regular": 75, "quarterfinal": 75, "semifinal": 90, "final": 90}
+• Si todas las fases tienen la misma duración, usa solo matchDurationMinutes (no matchDurationByPhase).
+• Si se menciona matchDurationByPhase, también pon en matchDurationMinutes la duración de la fase regular.
 
 REGLAS PARA gameMode:
 
