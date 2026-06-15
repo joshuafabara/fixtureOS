@@ -1,0 +1,21 @@
+name: fixtureos
+type: nodejs
+docroot: ""
+nodejs_version: "20"
+database:
+  type: postgres
+  version: "16"
+web_environment:
+  - DATABASE_URL=postgresql://db:db@db:5432/db
+  - NEXTAUTH_SECRET=fixtureos-local-dev-secret-min-32-chars!!
+  - NEXTAUTH_URL=https://fixtureos.ddev.site
+  - APP_PUBLIC_URL=https://fixtureos.ddev.site
+  - NODE_ENV=development
+web_extra_daemons:
+  - name: "nextjs"
+    command: "bash -c 'npm run dev 2>&1 | tee /tmp/nextjs.log'"
+    directory: /var/www/html
+hooks:
+  post-start:
+    - exec: "npm install --legacy-peer-deps"
+    - exec: "npm run db:migrate"
