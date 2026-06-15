@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -88,6 +88,172 @@ const STATUS_LABEL: Record<string, string> = {
   scheduled: "Programado", played: "Jugado", forfeit: "Forfeit", cancelled: "Cancelado",
 };
 
+// ── Date filter helpers ────────────────────────────────────────────────────
+type DateMode = { type: "single"; date: string } | { type: "range"; from: string; to: string } | { type: "all" };
+
+function compactDay(d: string) {
+  return new Date(d + "T12:00:00").toLocaleDateString("es-EC", { weekday: "short", day: "numeric", month: "short" });
+}
+
+function dateModeSummary(mode: DateMode, allDates: string[]) {
+  if (mode.type === "all") {
+    const first = compactDay(allDates[0] ?? "");
+    const last = compactDay(allDates[allDates.length - 1] ?? "");
+    return allDates.length <= 1 ? first : `${first} – ${last}`;
+  }
+  if (mode.type === "single") return compactDay(mode.date);
+  return `${compactDay(mode.from)} → ${compactDay(mode.to)}`;
+}
+
+function filterDatesByMode(allDates: string[], mode: DateMode): string[] {
+  if (mode.type === "all") return allDates;
+  if (mode.type === "single") return [mode.date];
+  return allDates.filter((d) => d >= mode.from && d <= mode.to);
+}
+
+function DateFilter({ allDates, mode, onChange }: {
+  allDates: string[];
+  mode: DateMode;
+  onChange: (m: DateMode) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
+  }, []);
+
+  const rangeFrom = mode.type === "range" ? mode.from : (mode.type === "single" ? mode.date : allDates[0] ?? "");
+  const rangeTo   = mode.type === "range" ? mode.to   : (mode.type === "single" ? mode.date : allDates[allDates.length - 1] ?? "");
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      {/* Trigger button */}
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px",
+          borderRadius: 10, border: `1.5px solid ${open ? "#0d9488" : "#d4dae3"}`,
+          background: "#fff", fontFamily: "var(--font-sans)",
+          fontWeight: 700, fontSize: 13, cursor: "pointer", color: "#131c2e",
+          boxShadow: open ? "0 0 0 3px rgba(13,148,136,.12)" : "none",
+          transition: "all .15s",
+        }}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "#0d9488" }}>
+          <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+        </svg>
+        {dateModeSummary(mode, allDates)}
+        <span style={{ color: "#94a3b8", fontSize: 11 }}>▾</span>
+      </button>
+
+      {/* Dropdown panel */}
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 50,
+          background: "#fff", border: "1px solid #e6eaf0",
+          borderRadius: 14, padding: "16px 0 8px", width: 320,
+          boxShadow: "0 8px 32px rgba(15,23,42,.12), 0 2px 8px rgba(15,23,42,.08)",
+        }}>
+          {/* Single day section */}
+          <div style={{ padding: "0 16px 8px" }}>
+            <p style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase", color: "#76869b", marginBottom: 6 }}>
+              Ver un día
+            </p>
+            <div style={{ maxHeight: 160, overflowY: "auto" }}>
+              {allDates.map((d) => {
+                const selected = mode.type === "single" && mode.date === d;
+                const dt = new Date(d + "T12:00:00");
+                const wday = dt.toLocaleDateString("es-EC", { weekday: "long" });
+                const dnum = dt.toLocaleDateString("es-EC", { day: "numeric", month: "short" });
+                return (
+                  <button
+                    key={d}
+                    onClick={() => { onChange({ type: "single", date: d }); setOpen(false); }}
+                    style={{
+                      width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "9px 12px", borderRadius: 9, border: "none", cursor: "pointer",
+                      background: selected ? "#dcf6f1" : "transparent",
+                      color: selected ? "#0f766e" : "#131c2e",
+                      fontFamily: "var(--font-sans)", fontWeight: selected ? 700 : 500, fontSize: 13.5,
+                      textAlign: "left", transition: "background .1s",
+                      textTransform: "capitalize",
+                    }}
+                    onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "#f8fafc"; }}
+                    onMouseLeave={(e) => { if (!selected) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span>{wday} <span style={{ color: "#76869b", fontWeight: 400 }}>{dnum}</span></span>
+                    {selected && (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0d9488" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6 9 17l-5-5" />
+                      </svg>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: "#e6eaf0", margin: "8px 0" }} />
+
+          {/* Range section */}
+          <div style={{ padding: "8px 16px" }}>
+            <p style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase", color: "#76869b", marginBottom: 10 }}>
+              Rango de fechas
+            </p>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: 11, color: "#76869b", fontWeight: 600, marginBottom: 4 }}>Desde</p>
+                <select
+                  value={rangeFrom}
+                  onChange={(e) => onChange({ type: "range", from: e.target.value, to: rangeTo >= e.target.value ? rangeTo : e.target.value })}
+                  style={{ width: "100%", fontSize: 12.5, fontWeight: 600, padding: "7px 10px", borderRadius: 8, border: "1px solid #d4dae3", background: "#fff", fontFamily: "var(--font-sans)", cursor: "pointer", appearance: "none" }}
+                >
+                  {allDates.map((d) => <option key={d} value={d}>{compactDay(d)}</option>)}
+                </select>
+              </div>
+              <span style={{ color: "#94a3b8", fontSize: 16, marginTop: 16 }}>→</span>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: 11, color: "#76869b", fontWeight: 600, marginBottom: 4 }}>Hasta</p>
+                <select
+                  value={rangeTo}
+                  onChange={(e) => onChange({ type: "range", from: rangeFrom, to: e.target.value })}
+                  style={{ width: "100%", fontSize: 12.5, fontWeight: 600, padding: "7px 10px", borderRadius: 8, border: "1px solid #d4dae3", background: "#fff", fontFamily: "var(--font-sans)", cursor: "pointer", appearance: "none" }}
+                >
+                  {allDates.filter((d) => d >= rangeFrom).map((d) => <option key={d} value={d}>{compactDay(d)}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: "#e6eaf0", margin: "8px 0" }} />
+
+          {/* Full tournament */}
+          <div style={{ padding: "4px 16px 8px" }}>
+            <button
+              onClick={() => { onChange({ type: "all" }); setOpen(false); }}
+              style={{
+                width: "100%", padding: "11px", borderRadius: 9, border: "none", cursor: "pointer",
+                background: mode.type === "all" ? "#dcf6f1" : "#f8fafc",
+                color: mode.type === "all" ? "#0f766e" : "#131c2e",
+                fontFamily: "var(--font-sans)", fontWeight: 700, fontSize: 13.5, transition: "background .1s",
+              }}
+              onMouseEnter={(e) => { if (mode.type !== "all") e.currentTarget.style.background = "#f1f5f9"; }}
+              onMouseLeave={(e) => { if (mode.type !== "all") e.currentTarget.style.background = "#f8fafc"; }}
+            >
+              Todo el torneo · {compactDay(allDates[0] ?? "")} – {compactDay(allDates[allDates.length - 1] ?? "")}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Sub-components ─────────────────────────────────────────────────────────
 
 function SegTabs({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -104,7 +270,7 @@ function SegTabs({ value, onChange }: { value: string; onChange: (v: string) => 
           style={{
             padding: "7px 14px", borderRadius: 8, border: "none", cursor: "pointer",
             fontFamily: "var(--font-sans)", fontSize: 13, fontWeight: 700,
-            background: value === t.id ? "var(--background,#fff)" : "transparent",
+            background: value === t.id ? "#fff" : "transparent",
             color: value === t.id ? "var(--foreground,#131c2e)" : "#64748b",
             boxShadow: value === t.id ? "0 1px 3px rgba(15,23,42,.10)" : "none",
             transition: "all .15s",
@@ -128,7 +294,7 @@ function MiniSelect({ value, onChange, options }: {
         style={{
           appearance: "none", WebkitAppearance: "none",
           padding: "8px 28px 8px 12px", borderRadius: 10,
-          border: "1px solid #d4dae3", background: "var(--background,#fff)",
+          border: "1px solid #d4dae3", background: "#fff",
           color: "var(--foreground,#131c2e)", fontWeight: 700, fontSize: 13,
           fontFamily: "var(--font-sans)", cursor: "pointer",
         }}
@@ -158,7 +324,7 @@ function CatChips({ cats, active, onToggle }: {
               display: "inline-flex", alignItems: "center", gap: 6,
               padding: "5px 11px 5px 9px", borderRadius: 99, cursor: "pointer",
               border: `1px solid ${on ? s.border : "#e2e8f0"}`,
-              background: on ? s.bg : "var(--background,#fff)",
+              background: on ? s.bg : "#fff",
               color: on ? s.text : "#94a3b8",
               fontWeight: 700, fontSize: 12.5, fontFamily: "var(--font-sans)",
               opacity: on ? 1 : 0.7, transition: "all .15s",
@@ -227,7 +393,7 @@ function CalendarView({ dayKey, matches, courtNames, activeCats, courtFilter }: 
   }
 
   return (
-    <div style={{ background: "var(--background,#fff)", border: "1px solid #e6eaf0", borderRadius: 14, overflow: "hidden" }}>
+    <div style={{ background: "#fff", border: "1px solid #e6eaf0", borderRadius: 14, overflow: "hidden" }}>
       {/* Date header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid #e6eaf0" }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, fontFamily: "var(--font-sans)", textTransform: "capitalize" }}>
@@ -276,7 +442,7 @@ function CalendarView({ dayKey, matches, courtNames, activeCats, courtFilter }: 
                     <span style={{
                       position: "absolute", top: -9, right: 8, fontSize: 11,
                       color: "#76869b", fontWeight: 600, fontFamily: "var(--font-mono)",
-                      background: "var(--background,#fff)", padding: "0 2px",
+                      background: "#fff", padding: "0 2px",
                     }}>{hh}:00</span>
                   )}
                 </div>
@@ -365,7 +531,7 @@ function CardsView({ dates, matches, activeCats, courtFilter, tournamentId, vers
 
         if (rows.length === 0) return null;
         return (
-          <div key={dateKey} style={{ background: "var(--background,#fff)", border: "1px solid #e6eaf0", borderRadius: 14, overflow: "hidden" }}>
+          <div key={dateKey} style={{ background: "#fff", border: "1px solid #e6eaf0", borderRadius: 14, overflow: "hidden" }}>
             {/* Card header */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid #e6eaf0" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
@@ -472,7 +638,14 @@ export function FixtureViewerClient({
     return all;
   }, [matches]);
 
-  const [selectedDate, setSelectedDate] = useState(() => sortedDates[0] ?? "");
+  const [dateMode, setDateMode] = useState<DateMode>(() =>
+    sortedDates.length > 0 ? { type: "single", date: sortedDates[0] } : { type: "all" }
+  );
+  const [calendarVisible, setCalendarVisible] = useState(4);
+
+  const visibleDates = useMemo(() => filterDatesByMode(sortedDates, dateMode), [sortedDates, dateMode]);
+
+  useEffect(() => { setCalendarVisible(4); }, [dateMode]);
 
   const toggleCat = useCallback((id: string) => {
     setActiveCats((prev) => {
@@ -482,14 +655,6 @@ export function FixtureViewerClient({
       return next;
     });
   }, []);
-
-  const dateOptions = useMemo(() =>
-    sortedDates.map((d) => ({
-      v: d,
-      l: new Date(d + "T12:00:00").toLocaleDateString("es-EC", { weekday: "short", day: "numeric", month: "short" }),
-    })),
-    [sortedDates]
-  );
 
   const courtOptions = useMemo(() => [
     { v: "all", l: "Todas las canchas" },
@@ -535,7 +700,7 @@ export function FixtureViewerClient({
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <Link href={`/fixture/${tournamentId}/edit?v=${versionNumber}`} style={{
             display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px",
-            borderRadius: 10, border: "1px solid #d4dae3", background: "var(--background,#fff)",
+            borderRadius: 10, border: "1px solid #d4dae3", background: "#fff",
             color: "#131c2e", fontWeight: 700, fontSize: 13, textDecoration: "none",
             fontFamily: "var(--font-sans)",
           }}>
@@ -546,7 +711,7 @@ export function FixtureViewerClient({
           </Link>
           <Link href={`/fixture/${tournamentId}/history`} style={{
             display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px",
-            borderRadius: 10, border: "1px solid #d4dae3", background: "var(--background,#fff)",
+            borderRadius: 10, border: "1px solid #d4dae3", background: "#fff",
             color: "#131c2e", fontWeight: 700, fontSize: 13, textDecoration: "none",
             fontFamily: "var(--font-sans)",
           }}>
@@ -570,19 +735,13 @@ export function FixtureViewerClient({
 
       {/* Toolbar card */}
       <div style={{
-        background: "var(--background,#fff)", border: "1px solid #e6eaf0", borderRadius: 14,
+        background: "#fff", border: "1px solid #e6eaf0", borderRadius: 14,
         padding: "12px 16px", marginBottom: 20,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <SegTabs value={view} onChange={(v) => setView(v as "calendar" | "cards")} />
           <div style={{ width: 1, height: 26, background: "#e6eaf0" }} />
-          {view === "calendar" && (
-            <MiniSelect
-              value={selectedDate}
-              onChange={setSelectedDate}
-              options={dateOptions}
-            />
-          )}
+          <DateFilter allDates={sortedDates} mode={dateMode} onChange={setDateMode} />
           <MiniSelect value={courtFilter} onChange={setCourtFilter} options={courtOptions} />
           <div style={{ flex: 1 }} />
           <CatChips cats={categories} active={activeCats} onToggle={toggleCat} />
@@ -592,22 +751,45 @@ export function FixtureViewerClient({
       {/* Content */}
       {matches.length === 0 ? (
         <div style={{
-          background: "var(--background,#fff)", border: "1px solid #e6eaf0", borderRadius: 14,
+          background: "#fff", border: "1px solid #e6eaf0", borderRadius: 14,
           padding: "60px 18px", textAlign: "center", color: "#76869b", fontSize: 14,
         }}>
           Sin partidos en esta versión.
         </div>
       ) : view === "calendar" ? (
-        <CalendarView
-          dayKey={selectedDate}
-          matches={matches}
-          courtNames={courtNames}
-          activeCats={activeCats}
-          courtFilter={courtFilter}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {visibleDates.slice(0, calendarVisible).map((dayKey) => (
+            <CalendarView
+              key={dayKey}
+              dayKey={dayKey}
+              matches={matches}
+              courtNames={courtNames}
+              activeCats={activeCats}
+              courtFilter={courtFilter}
+            />
+          ))}
+          {visibleDates.length > calendarVisible && (
+            <div style={{ textAlign: "center" }}>
+              <button
+                onClick={() => setCalendarVisible((n) => n + 4)}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  padding: "10px 20px", borderRadius: 10, border: "1.5px solid #d4dae3",
+                  background: "#fff", fontFamily: "var(--font-sans)",
+                  fontWeight: 700, fontSize: 13, cursor: "pointer", color: "#475569",
+                }}
+              >
+                Ver más fechas
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                  ({visibleDates.length - calendarVisible} restante{visibleDates.length - calendarVisible !== 1 ? "s" : ""})
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
       ) : (
         <CardsView
-          dates={sortedDates}
+          dates={visibleDates}
           matches={matches}
           activeCats={activeCats}
           courtFilter={courtFilter}

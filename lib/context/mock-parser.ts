@@ -5,6 +5,13 @@
  * TODO: replace with OpenAI structured output when AI integration is enabled
  */
 
+export type BracketRounds = {
+  quarterfinal?: string[];
+  semifinal?: string[];
+  final?: string[];
+  third_place?: string[];
+};
+
 export type ParsedConstraints = {
   scope: string;
   courts?: string[];
@@ -21,8 +28,12 @@ export type ParsedConstraints = {
     type: string;
     groups?: number;
     groupRounds?: number;
+    teamsPerGroup?: number;
+    totalQualifiers?: number;
+    byeSeeds?: number[];
     classification?: string;
     playoffs?: string[];
+    bracketRounds?: BracketRounds;
   };
   matchDurationMinutes?: number;
   priority?: number;

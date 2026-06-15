@@ -7,8 +7,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Sparkles, Save, Trash2, AlertTriangle, Check, X, CheckCircle,
-  Target, History, Zap, ArrowDown, Clock, Pin, Users, Layers, Flag,
+  Target, History, Zap, ArrowDown, Clock, Pin, Users, Layers, Flag, Trophy,
 } from "lucide-react";
+
+type BracketRounds = {
+  quarterfinal?: string[];
+  semifinal?: string[];
+  final?: string[];
+  third_place?: string[];
+};
 
 type ParsedConstraints = Record<string, unknown> & {
   startDate?: string;
@@ -16,13 +23,19 @@ type ParsedConstraints = Record<string, unknown> & {
     type?: string;
     groups?: number;
     groupRounds?: number;
+    teamsPerGroup?: number;
+    totalQualifiers?: number;
+    byeSeeds?: number[];
     classification?: string;
     playoffs?: string[];
+    bracketRounds?: BracketRounds;
   };
   matchDurationMinutes?: number;
   defaultMatchDurationMinutes?: number;
   warnings?: string[];
 };
+
+type TeamRow = { id: string; name: string; clubName?: string };
 
 type CategoryRow = {
   id: string;
@@ -47,17 +60,43 @@ const EXAMPLE_PROMPTS = [
   "Solo round robin simple, todos contra todos una vez.",
 ];
 
-const DAY_LABELS: Record<string, string> = {
-  monday: "Lun", tuesday: "Mar", wednesday: "Mié",
-  thursday: "Jue", friday: "Vie", saturday: "Sáb", sunday: "Dom",
+const CLASSIFICATION_LABELS: Record<string, string> = {
+  top_1_per_group: "Top 1 por grupo",
+  top_2_per_group: "Top 2 por grupo",
+  top_3_per_group: "Top 3 por grupo",
+  top_4_per_group: "Top 4 por grupo",
+  top_1: "1er lugar",
+  top_2: "Top 2",
+  top_3: "Top 3",
+  top_4: "Top 4",
+  top_6: "Top 6",
+  top_6_per_group: "Top 6",
+  top_8: "Top 8",
+  all: "Todos",
 };
 
-const GAME_MODE_LABELS: Record<string, string> = {
-  single_round_robin: "Round robin simple",
-  double_round_robin: "Doble round robin",
-  groups: "Fase de grupos + playoffs",
-  playoffs: "Eliminación directa",
+const PLAYOFF_LABELS: Record<string, string> = {
+  quarterfinal: "Cuartos",
+  semifinal: "Semifinal",
+  final: "Final",
+  third_place: "3er lugar",
 };
+
+function formatClassification(cls: string | undefined): string {
+  if (!cls) return "—";
+  return CLASSIFICATION_LABELS[cls] ?? cls.replace(/_/g, " ");
+}
+
+function formatPlayoffs(playoffs: string[] | undefined): string {
+  if (!playoffs || playoffs.length === 0) return "—";
+  return playoffs.map((p) => PLAYOFF_LABELS[p] ?? p).join(" · ");
+}
+
+function splitIntoGroups<T>(items: T[], n: number): T[][] {
+  const groups: T[][] = Array.from({ length: n }, () => []);
+  items.forEach((item, i) => groups[i % n].push(item));
+  return groups;
+}
 
 function EligibilityPanel({ category }: { category: CategoryRow }) {
   const eligible = category.isActiveForFixture;
@@ -131,72 +170,260 @@ function InheritedRuleCard({ rule }: { rule: InheritedRule }) {
   );
 }
 
-function GameModePreview({ constraints }: { constraints: ParsedConstraints }) {
-  const gm = constraints.gameMode;
-  if (!gm) return null;
-  const duration = constraints.matchDurationMinutes ?? constraints.defaultMatchDurationMinutes;
-
+function TeamsWidget({ teams, colorHex }: { teams: TeamRow[]; colorHex: string | null }) {
+  const color = colorHex ?? "#0d9488";
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {[
-          ["Tipo", GAME_MODE_LABELS[gm.type ?? ""] ?? gm.type ?? "—"],
-          ["Grupos", gm.type === "groups" ? String(gm.groups ?? 2) : "—"],
-          ["Clasifican", gm.classification === "top_2_per_group" ? "Top 2 por grupo" : (gm.classification ?? "—")],
-          ["Playoffs", gm.playoffs?.join(" · ") ?? "—"],
-          ["Duración", duration ? `${duration} min` : "Heredada"],
-          ["Prioridad", "Heredada"],
-        ].map(([l, v]) => (
-          <div key={l} className="p-2.5 rounded-lg bg-muted/60 border">
-            <div className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-1">{l}</div>
-            <div className="text-sm font-bold truncate">{v}</div>
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Users className="h-4 w-4 text-muted-foreground" />
+          Equipos inscritos
+          <span className="ml-auto font-mono text-xs font-bold text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+            {teams.length}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        {teams.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-2">Sin equipos inscritos en esta categoría</p>
+        ) : (
+          teams.map((team, i) => (
+            <div
+              key={team.id}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "7px 9px", borderRadius: 8,
+                background: "#f8fafc", border: "1px solid #e6eaf0",
+              }}
+            >
+              <span style={{
+                width: 22, height: 22, borderRadius: 99,
+                background: color, color: "#fff",
+                display: "grid", placeItems: "center",
+                fontSize: 11, fontWeight: 800, flexShrink: 0,
+              }}>
+                {i + 1}
+              </span>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: "#131c2e", lineHeight: 1.3 }}>{team.name}</div>
+                {team.clubName && (
+                  <div style={{ fontSize: 11, color: "#76869b" }}>{team.clubName}</div>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ padding: "10px 12px", borderRadius: 9, background: "#f8fafc", border: "1px solid #e6eaf0" }}>
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.8, textTransform: "uppercase", color: "#76869b", marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 800, color: "#131c2e", lineHeight: 1.2 }}>{value}</div>
+    </div>
+  );
+}
+
+function BracketRound({ title, matches, id_prefix, teal }: {
+  title: string; matches: string[]; id_prefix: string; teal?: boolean;
+}) {
+  return (
+    <div style={teal ? {
+      background: "linear-gradient(135deg, rgba(13,148,136,0.08), rgba(13,148,136,0.02))",
+      border: "1px solid rgba(13,148,136,0.2)", borderRadius: 12, padding: 12,
+    } : {
+      background: "rgba(248,250,252,0.8)", border: "1px solid #e6eaf0", borderRadius: 12, padding: 12,
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.8, textTransform: "uppercase", color: teal ? "#0d9488" : "#76869b", marginBottom: 8 }}>
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {matches.map((match, i) => (
+          <div key={i} className="flex items-center gap-2 bg-background border rounded-lg px-2.5 py-1.5">
+            <span className="text-xs font-bold text-brand-600 shrink-0" style={{ minWidth: 28 }}>
+              {id_prefix}{i + 1}
+            </span>
+            <span className="text-xs text-muted-foreground">{match}</span>
           </div>
         ))}
       </div>
+      {teal && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px 0", fontSize: 11.5, fontWeight: 700, color: "#0d9488" }}>
+          <Trophy style={{ width: 12, height: 12 }} /> Campeón
+        </div>
+      )}
+    </div>
+  );
+}
 
-      {gm.type === "groups" && (
+function GameModePreview({ constraints, teams }: { constraints: ParsedConstraints; teams: TeamRow[] }) {
+  const gm = constraints.gameMode;
+  if (!gm) return null;
+
+  const duration = constraints.matchDurationMinutes ?? constraints.defaultMatchDurationMinutes;
+  const numGroups = (gm.groups && gm.groups > 0) ? gm.groups : 1;
+  const numRounds = gm.groupRounds ?? (gm.type === "double_round_robin" ? 2 : 1);
+  const hasPlayoffs = Array.isArray(gm.playoffs) && gm.playoffs.length > 0;
+  const hasGroups = numGroups > 1;
+  const groupLetters = "ABCDEFGH".split("");
+  const br = gm.bracketRounds;
+
+  // Distribute teams across groups for the bracket preview
+  const groupedTeams = hasGroups && teams.length > 0
+    ? splitIntoGroups(teams.map((t) => t.name), numGroups)
+    : [];
+
+  const numSlotsPerGroup = hasGroups
+    ? Math.max(teams.length > 0 ? Math.ceil(teams.length / numGroups) : 4, 2)
+    : Math.max(gm.teamsPerGroup ?? (teams.length > 0 ? teams.length : 4), 2);
+
+  const showGroupCards = hasGroups || teams.length > 0;
+
+  // Playoff rounds to render (order matters)
+  const playoffOrder: Array<{ key: keyof BracketRounds; label: string; idPrefix: string; teal?: boolean }> = [
+    { key: "quarterfinal", label: "Cuartos de final", idPrefix: "QF" },
+    { key: "semifinal", label: "Semifinales", idPrefix: "SF" },
+    { key: "final", label: "Final", idPrefix: "F", teal: true },
+  ];
+  const has3P = br?.third_place && br.third_place.length > 0;
+
+  // Build fallback bracket if no bracketRounds from AI
+  function fallbackMatches(round: string): string[] {
+    if (round === "quarterfinal") {
+      if (hasGroups && numGroups === 2)
+        return ["A1 vs B3", "B1 vs A3", "A2 vs B4", "B2 vs A4"];
+      return ["3 vs 6", "4 vs 5"];
+    }
+    if (round === "semifinal") {
+      if (hasGroups && !br?.quarterfinal)
+        return ["A1 vs B2", "B1 vs A2"];
+      if (br?.quarterfinal)
+        return ["2 vs Gan. QF1", "1 vs Gan. QF2"];
+      return ["Gan. QF1 vs Gan. QF2", "Gan. QF3 vs Gan. QF4"];
+    }
+    if (round === "final") return ["Gan. SF1 vs Gan. SF2"];
+    if (round === "third_place") return ["Per. SF1 vs Per. SF2"];
+    return [];
+  }
+
+  const activeRounds = playoffOrder.filter(({ key }) => {
+    const keyStr = key as string;
+    const inPlayoffs = gm.playoffs?.includes(keyStr) ?? false;
+    const hasBr = br && Array.isArray(br[key]) && (br[key] as string[]).length > 0;
+    return inPlayoffs || hasBr;
+  });
+
+  return (
+    <div className="space-y-5">
+      {/* Stat grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+        <StatBox label="Grupos" value={String(numGroups)} />
+        <StatBox label="Vueltas" value={String(numRounds)} />
+        <StatBox label="Clasifican" value={formatClassification(gm.classification)} />
+        <StatBox label="Playoffs" value={formatPlayoffs(gm.playoffs)} />
+        <StatBox label="Duración" value={duration ? `${duration} min` : "Heredada"} />
+        <StatBox label="Prioridad" value="Heredada" />
+      </div>
+
+      {/* Bye seeds indicator */}
+      {gm.byeSeeds && gm.byeSeeds.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 9, background: "rgba(13,148,136,0.07)", border: "1px solid rgba(13,148,136,0.2)", fontSize: 12.5 }}>
+          <Check className="h-3.5 w-3.5 text-brand-600 shrink-0" />
+          <span className="text-muted-foreground">
+            Siembras <strong className="text-foreground">{gm.byeSeeds.map((s) => `#${s}`).join(" y ")}</strong> clasifican directo a la siguiente ronda (bye)
+          </span>
+        </div>
+      )}
+
+      {/* Bracket preview */}
+      {(showGroupCards || hasPlayoffs) && (
         <div>
-          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1.5">
-            <Layers className="h-3.5 w-3.5 text-brand-500" /> Vista previa del cuadro
+          <p style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase", color: "#76869b", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+            </svg>
+            Vista previa del cuadro
           </p>
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            {["A", "B"].slice(0, gm.groups ?? 2).map((g) => (
-              <div key={g} className="bg-muted/60 border rounded-xl p-3">
-                <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Grupo {g}</div>
-                <div className="space-y-1.5">
-                  {[1, 2, 3, 4].map((n) => (
-                    <div key={n} className="flex items-center gap-2 bg-background border rounded-lg px-2.5 py-1.5">
-                      <span className="text-xs font-bold text-brand-600 w-4">{g}{n}</span>
-                      <span className="text-xs text-muted-foreground">Equipo {g}{n}</span>
+
+          {/* Group cards */}
+          {showGroupCards && (
+            <div
+              style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(Math.max(numGroups, 1), 4)}, 1fr)`, gap: 10, marginBottom: hasPlayoffs ? 16 : 0 }}
+            >
+              {groupLetters.slice(0, Math.max(numGroups, 1)).map((letter, gi) => {
+                const groupTeamNames = hasGroups ? (groupedTeams[gi] ?? []) : teams.map((t) => t.name);
+                const slots = Array.from({ length: numSlotsPerGroup });
+                return (
+                  <div key={letter} className="bg-muted/40 border rounded-xl p-3">
+                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.8, textTransform: "uppercase", color: "#76869b", marginBottom: 8 }}>
+                      {hasGroups ? `Grupo ${letter}` : "Grupo único"}
                     </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-            <div className="bg-muted/60 border rounded-xl p-3">
-              <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Semifinales</div>
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2 bg-background border rounded-lg px-2.5 py-1.5">
-                  <span className="text-xs font-bold text-brand-600 w-6">SF1</span>
-                  <span className="text-xs text-muted-foreground">A1 vs B2</span>
-                </div>
-                <div className="flex items-center gap-2 bg-background border rounded-lg px-2.5 py-1.5">
-                  <span className="text-xs font-bold text-brand-600 w-6">SF2</span>
-                  <span className="text-xs text-muted-foreground">B1 vs A2</span>
-                </div>
-              </div>
+                    <div className="space-y-1.5">
+                      {slots.map((_, i) => (
+                        <div key={i} className="flex items-center gap-2 bg-background border rounded-lg px-2.5 py-1.5">
+                          <span className="text-xs font-bold text-brand-600 shrink-0" style={{ minWidth: 22 }}>
+                            {hasGroups ? `${letter}${i + 1}` : `${i + 1}`}
+                          </span>
+                          <span className="text-xs text-muted-foreground truncate">
+                            {groupTeamNames[i] ?? `Equipo ${hasGroups ? letter : ""}${i + 1}`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <div className="text-muted-foreground text-xs">→</div>
-            <div className="bg-gradient-to-br from-brand-50 to-background dark:from-brand-900/20 border border-brand-200 dark:border-brand-800 rounded-xl p-3">
-              <div className="text-xs font-bold uppercase tracking-wider text-brand-600 mb-2">Final</div>
-              <div className="flex items-center gap-2 bg-background border rounded-lg px-2.5 py-1.5">
-                <span className="text-xs font-bold text-brand-600 w-4">F</span>
-                <span className="text-xs text-muted-foreground">SF1 vs SF2</span>
+          )}
+
+          {/* Playoff bracket — use bracketRounds from AI if available, else fallback */}
+          {hasPlayoffs && activeRounds.length > 0 && (
+            <div>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "nowrap", overflowX: "auto" }}>
+                {activeRounds.map(({ key, label, idPrefix, teal }, idx) => {
+                  const keyStr = key as string;
+                  const matches = (br && Array.isArray(br[key]) && (br[key] as string[]).length > 0)
+                    ? (br[key] as string[])
+                    : fallbackMatches(keyStr);
+                  return (
+                    <div key={keyStr} style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto", minWidth: 0 }}>
+                      <div style={{ minWidth: 160, maxWidth: 220 }}>
+                        <BracketRound title={label} matches={matches} id_prefix={idPrefix} teal={teal} />
+                      </div>
+                      {idx < activeRounds.length - 1 && (
+                        <div style={{ color: "#94a3b8", fontSize: 20, fontWeight: 200, flexShrink: 0 }}>→</div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
+
+              {/* Third place */}
+              {has3P && (
+                <div style={{ marginTop: 10 }}>
+                  <BracketRound
+                    title="3er lugar"
+                    matches={br!.third_place!}
+                    id_prefix="3P"
+                  />
+                </div>
+              )}
+              {!has3P && gm.playoffs?.includes("third_place") && (
+                <div style={{ marginTop: 10 }}>
+                  <BracketRound
+                    title="3er lugar"
+                    matches={fallbackMatches("third_place")}
+                    id_prefix="3P"
+                  />
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -209,12 +436,14 @@ export function CategoryContextEditor({
   inheritedRules,
   initialPrompt,
   versionNumber,
+  teams,
 }: {
   category: CategoryRow;
   allCategories: CategoryRow[];
   inheritedRules: InheritedRule[];
   initialPrompt: string;
   versionNumber: number;
+  teams: TeamRow[];
 }) {
   const router = useRouter();
   const [prompt, setPrompt] = useState(initialPrompt);
@@ -261,10 +490,7 @@ export function CategoryContextEditor({
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setSaved(true);
-      setTimeout(() => {
-        router.refresh();
-        setSaved(false);
-      }, 1500);
+      setTimeout(() => { router.refresh(); setSaved(false); }, 1500);
     } catch {
       setError("Error al guardar el contexto de categoría.");
     } finally {
@@ -288,33 +514,23 @@ export function CategoryContextEditor({
                   : "border-border bg-background text-muted-foreground hover:text-foreground hover:border-foreground/30"
               }`}
             >
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ background: cat.colorHex ?? "#6b7280" }}
-              />
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.colorHex ?? "#6b7280" }} />
               {cat.name}
-              {!cat.isActiveForFixture && (
-                <AlertTriangle className="h-3 w-3 text-amber-500" />
-              )}
+              {!cat.isActiveForFixture && <AlertTriangle className="h-3 w-3 text-amber-500" />}
             </a>
           );
         })}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 items-start">
-        {/* Left — Eligibility + Inherited */}
+        {/* Left — Eligibility + Inherited + Teams */}
         <div className="space-y-4">
           <Card>
             <CardContent className="pt-5">
               <div className="flex items-center gap-2 mb-4">
-                <span
-                  className="w-3 h-3 rounded-full"
-                  style={{ background: category.colorHex ?? "#6b7280" }}
-                />
+                <span className="w-3 h-3 rounded-full" style={{ background: category.colorHex ?? "#6b7280" }} />
                 <span className="font-bold text-sm">{category.name}</span>
-                <span className="ml-auto text-xs text-muted-foreground font-mono font-bold">
-                  {category.teamCount} eq.
-                </span>
+                <span className="ml-auto text-xs text-muted-foreground font-mono font-bold">{category.teamCount} eq.</span>
               </div>
               <EligibilityPanel category={category} />
             </CardContent>
@@ -335,6 +551,8 @@ export function CategoryContextEditor({
               )}
             </CardContent>
           </Card>
+
+          <TeamsWidget teams={teams} colorHex={category.colorHex} />
         </div>
 
         {/* Right — Editor + Preview */}
@@ -388,12 +606,15 @@ export function CategoryContextEditor({
             <Card className="border-brand-200 dark:border-brand-800">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm">Modo de juego interpretado</CardTitle>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-brand-600" />
+                    Modo de juego interpretado
+                  </CardTitle>
                   <Badge variant="info">Interpretado</Badge>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <GameModePreview constraints={preview} />
+                <GameModePreview constraints={preview} teams={teams} />
 
                 {preview.startDate && (
                   <div className="flex items-center gap-2 text-sm bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-lg px-3 py-2">
@@ -428,19 +649,12 @@ export function CategoryContextEditor({
         </Button>
         <div className="flex-1" />
         <Button variant="outline" size="sm" asChild>
-          <a href="/context/history">
-            <History className="h-4 w-4" /> Historial
-          </a>
+          <a href="/context/history"><History className="h-4 w-4" /> Historial</a>
         </Button>
         <Button variant="outline" size="sm" asChild>
-          <a href="/context/impact-simulator">
-            <Target className="h-4 w-4" /> Simular impacto
-          </a>
+          <a href="/context/impact-simulator"><Target className="h-4 w-4" /> Simular impacto</a>
         </Button>
-        <Button
-          onClick={handleConfirm}
-          disabled={!preview || saving || saved}
-        >
+        <Button onClick={handleConfirm} disabled={!preview || saving || saved}>
           {saved ? (
             <><Check className="h-4 w-4" /> Guardado</>
           ) : saving ? (

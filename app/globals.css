@@ -91,15 +91,11 @@
   }
 
   .sidebar-link {
-    @apply flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors;
-    color: hsl(var(--sidebar-foreground));
+    @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 relative;
+    color: hsl(var(--sidebar-foreground) / 0.7);
   }
   .sidebar-link:hover {
     background-color: hsl(var(--sidebar-accent));
-    color: hsl(var(--sidebar-accent-foreground));
-  }
-  .sidebar-link.active {
-    background-color: hsl(var(--sidebar-primary) / 0.15);
-    color: hsl(var(--sidebar-primary));
+    color: hsl(var(--sidebar-foreground));
   }
 }

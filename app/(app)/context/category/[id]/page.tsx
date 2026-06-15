@@ -1,9 +1,9 @@
 import { requireOrg } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import {
-  categories, contextVersions, teams, tournaments,
+  categories, contextVersions, teams, tournaments, clubs,
 } from "@/lib/db/schema";
-import { eq, and, count, desc } from "drizzle-orm";
+import { eq, and, count, desc, asc } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -83,6 +83,14 @@ export default async function CategoryContextPage({
     )
     .orderBy(desc(contextVersions.versionNumber))
     .limit(1);
+
+  // Teams in this category (with club name for display)
+  const categoryTeams = await db
+    .select({ id: teams.id, name: teams.name, clubName: clubs.name })
+    .from(teams)
+    .leftJoin(clubs, eq(teams.clubId, clubs.id))
+    .where(and(eq(teams.categoryId, params.id), eq(teams.organizationId, orgId)))
+    .orderBy(asc(teams.name));
 
   // Tournament name
   const [tournament] = await db
@@ -168,6 +176,7 @@ export default async function CategoryContextPage({
         inheritedRules={inheritedRules}
         initialPrompt={latestVersion?.rawPrompt ?? ""}
         versionNumber={latestVersion?.versionNumber ?? 0}
+        teams={categoryTeams.map((t) => ({ id: t.id, name: t.name, clubName: t.clubName ?? undefined }))}
       />
     </div>
   );
