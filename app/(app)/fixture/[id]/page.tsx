@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Calendar, Clock, Pin, History, ChevronLeft,
-  Lock, CheckCircle2, XCircle, MinusCircle,
+  Lock, CheckCircle2, XCircle, MinusCircle, Edit2,
 } from "lucide-react";
 import { FixturePublishControls } from "@/components/fixture/fixture-publish-controls";
 
@@ -206,6 +206,11 @@ export default async function FixtureViewerPage({
             state={selectedVersion.state as "draft" | "published" | "archived"}
             versionNumber={selectedVersion.versionNumber}
           />
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/fixture/${tournamentId}/edit?v=${selectedVersion.versionNumber}`}>
+              <Edit2 className="h-4 w-4" /> Editar
+            </Link>
+          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link href={`/fixture/${tournamentId}/history`}>
               <History className="h-4 w-4" /> Historial
