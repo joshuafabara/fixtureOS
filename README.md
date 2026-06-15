@@ -126,7 +126,8 @@ npm run db:studio    # Open Drizzle Studio (browser DB GUI)
 npm run db:seed      # Seed demo data (Liga Deportiva Quito + Copa Alpha 2026)
 
 npm run test         # Run Vitest unit tests
-npx playwright test  # Run Playwright E2E tests (requires app running on :3000)
+npm run test:e2e     # Run Playwright E2E tests (requires app running on :3000)
+npm run test:e2e:ui  # Open Playwright interactive UI runner
 ```
 
 ---
@@ -152,6 +153,49 @@ After seeding (`npm run db:seed` / `ddev exec npm run db:seed`):
 - [ ] `npm run db:migrate`
 - [ ] `npm run db:seed`
 - [ ] `npm run dev` and open http://localhost:3000
+
+---
+
+## Testing
+
+### Unit tests (Vitest)
+
+```bash
+npm run test
+```
+
+No running server needed — these test pure logic in `lib/`.
+
+### E2E tests (Playwright)
+
+Playwright tests require the app to be running with a seeded database.
+
+**First time only — install browser:**
+```bash
+npx playwright install chromium
+```
+
+**Run the tests:**
+```bash
+# 1. Make sure the app is running (in a separate terminal):
+npm run dev        # or: ddev start (DDEV handles this automatically)
+
+# 2. Run E2E tests:
+npm run test:e2e
+
+# Or open the interactive Playwright UI:
+npm run test:e2e:ui
+```
+
+**What the tests cover:**
+- Login page renders with email/password fields
+- Unauthenticated users are redirected to `/login`
+- Successful login with seed credentials lands on dashboard
+- Wrong credentials show an error message
+- Authenticated access to: dashboard, tournaments, teams, context, dry-run, clubs, categories
+- Dry run generation flow (conditional on seeded eligible categories)
+
+> **Note for DDEV:** Run `npm run test:e2e` from your local machine pointing at `http://localhost:3000`, or proxy through the DDEV URL by setting `baseURL` in `playwright.config.ts`.
 
 ---
 
