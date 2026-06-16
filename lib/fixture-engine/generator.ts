@@ -154,7 +154,7 @@ export async function generateFixtureDryRun(
   const clubGrouping = (orgConstraints.clubGrouping as { enabled?: boolean } | undefined)?.enabled ?? false;
 
   // Collect timeRestrictions from org + tournament level (category-level merged per-category below)
-  type TimeRestriction = { target: string; afterTime: string };
+  type TimeRestriction = { target: string; afterTime?: string; beforeTime?: string };
   const orgTimeRestrictions = (orgConstraints.timeRestrictions as TimeRestriction[] | undefined) ?? [];
   const tournamentTimeRestrictions = (tournamentConstraints.timeRestrictions as TimeRestriction[] | undefined) ?? [];
 
@@ -273,6 +273,67 @@ export async function generateFixtureDryRun(
     { clubGrouping }
   );
 
+  // 11b. Knockout placeholder matches (TBD vs TBD) for bracket rounds
+  type PlaceholderMatch = {
+    categoryId: string;
+    homeTeamId: null;
+    awayTeamId: null;
+    date: null;
+    startTime: null;
+    endTime: null;
+    courtId: null;
+    courtName: null;
+    phase: string;
+    roundIndex: number;
+    isPlaceholder: true;
+  };
+
+  const ROUND_MATCH_COUNTS: Record<string, number> = {
+    quarterfinal: 4,
+    semifinal: 2,
+    final: 1,
+    "3rd_place": 1,
+  };
+
+  const placeholderMatches: PlaceholderMatch[] = [];
+  for (const catId of eligibleCats) {
+    const gm = gameModeMap.get(catId);
+    if (!gm) continue;
+    const gmType = (gm.type as string | undefined) ?? "";
+    const playoffs = (gm.playoffs as string[] | undefined) ?? [];
+
+    let rounds: string[] = [];
+    if (gmType === "playoffs") {
+      // pure playoffs — derive rounds from team count
+      const catTeams = teamsByCategory.get(catId) ?? [];
+      const n = catTeams.length;
+      if (n >= 8) rounds = ["quarterfinal", "semifinal", "final"];
+      else if (n >= 4) rounds = ["semifinal", "final"];
+      else if (n >= 2) rounds = ["final"];
+    } else if (gmType === "groups" && playoffs.length > 0) {
+      rounds = playoffs;
+    }
+
+    for (const round of rounds) {
+      const matchCount = ROUND_MATCH_COUNTS[round] ?? 1;
+      for (let i = 0; i < matchCount; i++) {
+        placeholderMatches.push({
+          categoryId: catId,
+          homeTeamId: null,
+          awayTeamId: null,
+          date: null,
+          startTime: null,
+          endTime: null,
+          courtId: null,
+          courtName: null,
+          phase: round,
+          roundIndex: i,
+          isPlaceholder: true,
+        });
+      }
+    }
+  }
+
   // 12. Conflict detection
   const scheduledForConflict: ScheduledMatch[] = scheduledMatches.map((m) => ({
     id: `${m.categoryId}-${m.homeTeamId}-${m.awayTeamId}`, // temp id
@@ -296,6 +357,7 @@ export async function generateFixtureDryRun(
     categoriesSkipped: categoriesWithCount.length - eligibleCatIds.size,
     matchesScheduled: scheduledMatches.length,
     matchesUnscheduled: unscheduledPairs.length,
+    placeholderMatches: placeholderMatches.length,
     conflicts: allConflicts.length,
     warnings: warnings.length,
     eligibilityReasons: eligibilityResults
@@ -318,6 +380,21 @@ export async function generateFixtureDryRun(
 
   // 15. Persist dry run changes
   const changesToInsert = [
+    // Placeholder knockout matches
+    ...placeholderMatches.map((m) => {
+      const cat = catsRaw.find((c) => c.id === m.categoryId);
+      const roundLabel: Record<string, string> = { quarterfinal: "Cuartos de final", semifinal: "Semifinal", final: "Final", "3rd_place": "Tercer puesto" };
+      return {
+        dryRunId: dryRun.id,
+        changeType: "add",
+        entityType: "match",
+        entityId: null,
+        beforeJson: null,
+        afterJson: m as unknown as Record<string, unknown>,
+        severity: "info" as const,
+        explanation: `Placeholder: ${roundLabel[m.phase] ?? m.phase} (match ${m.roundIndex + 1}) · ${cat?.name ?? "Categoría"}`,
+      };
+    }),
     // Scheduled matches as "add" changes
     ...scheduledMatches.map((m) => ({
       dryRunId: dryRun.id,

@@ -27,6 +27,7 @@ const NAV = [
       { label: "Simulador", href: "/context/impact-simulator" },
     ],
   },
+  { label: "Partidos", icon: ClipboardList, href: "/matches" },
   { label: "Clubes", icon: Building2, href: "/clubs" },
   { label: "Comunicaciones", icon: MessageSquare, href: "/communications" },
   {

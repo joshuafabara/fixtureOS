@@ -396,6 +396,68 @@ export function mockAuditFixture(input: AuditInput): AuditReport {
   };
 }
 
+// ─── Field normalizer (handles camelCase vs snake_case from OpenAI) ───────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeViolation(v: Record<string, any>): AuditViolation {
+  const rec = (v.machine_recommendation ?? v.machineRecommendation ?? {}) as Record<string, unknown>;
+  return {
+    severity: (v.severity ?? "info") as AuditViolationSeverity,
+    type: (v.type ?? "context_missed") as AuditViolationType,
+    context_source: (v.context_source ?? v.contextSource ?? "organization") as AuditContextSource,
+    human_prompt_excerpt: String(v.human_prompt_excerpt ?? v.humanPromptExcerpt ?? v.prompt_excerpt ?? ""),
+    affected_match_ids: (v.affected_match_ids ?? v.affectedMatchIds ?? []) as string[],
+    affected_category_ids: (v.affected_category_ids ?? v.affectedCategoryIds ?? []) as string[],
+    explanation_es: String(v.explanation_es ?? v.explanationEs ?? v.explanation ?? ""),
+    recommended_fix_es: String(v.recommended_fix_es ?? v.recommendedFixEs ?? v.recommended_fix ?? v.fix ?? ""),
+    machine_recommendation: {
+      action: (rec.action ?? "none") as MachineAction,
+      patch: (rec.patch ?? null) as Record<string, unknown> | null,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeMissingInterpretation(m: Record<string, any>): MissingInterpretation {
+  return {
+    prompt_excerpt: String(m.prompt_excerpt ?? m.promptExcerpt ?? ""),
+    issue_es: String(m.issue_es ?? m.issueEs ?? m.issue ?? ""),
+    suggested_question_es: String(m.suggested_question_es ?? m.suggestedQuestionEs ?? m.suggested_question ?? ""),
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeApprovedConstraint(c: Record<string, any>): ApprovedConstraint {
+  return {
+    constraint_id: String(c.constraint_id ?? c.constraintId ?? ""),
+    status: (c.status ?? "not_applicable") as ApprovedConstraint["status"],
+    explanation_es: String(c.explanation_es ?? c.explanationEs ?? c.explanation ?? ""),
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeAuditReport(raw: Record<string, any>): AuditReport {
+  const status = raw.status && ["pass", "warning", "fail"].includes(raw.status) ? raw.status : "warning";
+  const confidence = typeof raw.confidence === "number" ? raw.confidence : 0.7;
+  const summary_es = String(raw.summary_es ?? raw.summaryEs ?? raw.summary ?? "");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const violations = (raw.violations ?? []).map((v: Record<string, any>) => normalizeViolation(v));
+  const missing_interpretations = (raw.missing_interpretations ?? raw.missingInterpretations ?? [])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((m: Record<string, any>) => normalizeMissingInterpretation(m));
+  const approved_constraints = (raw.approved_constraints ?? raw.approvedConstraints ?? [])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((c: Record<string, any>) => normalizeApprovedConstraint(c));
+  const requires_user_confirmation =
+    typeof raw.requires_user_confirmation === "boolean"
+      ? raw.requires_user_confirmation
+      : typeof raw.requiresUserConfirmation === "boolean"
+      ? raw.requiresUserConfirmation
+      : status !== "pass";
+
+  return { status, confidence, summary_es, violations, missing_interpretations, approved_constraints, requires_user_confirmation };
+}
+
 // ─── OpenAI auditor ───────────────────────────────────────────────────────────
 
 export async function auditFixture(input: AuditInput): Promise<AuditReport> {
@@ -435,21 +497,12 @@ export async function auditFixture(input: AuditInput): Promise<AuditReport> {
     });
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(raw) as AuditReport;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const parsed = JSON.parse(raw) as Record<string, any>;
 
-    // Validate essential fields with fallback
-    if (!parsed.status || !["pass", "warning", "fail"].includes(parsed.status)) {
-      parsed.status = "warning";
-    }
-    if (typeof parsed.confidence !== "number") parsed.confidence = 0.7;
-    if (!parsed.violations) parsed.violations = [];
-    if (!parsed.missing_interpretations) parsed.missing_interpretations = [];
-    if (!parsed.approved_constraints) parsed.approved_constraints = [];
-    if (typeof parsed.requires_user_confirmation !== "boolean") {
-      parsed.requires_user_confirmation = parsed.status !== "pass";
-    }
-
-    return parsed;
+    // Normalize and validate
+    const report = normalizeAuditReport(parsed);
+    return report;
   } catch {
     return mockAuditFixture(input);
   }

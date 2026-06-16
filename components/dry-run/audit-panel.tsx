@@ -1,17 +1,25 @@
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ShieldCheck, ShieldAlert, ShieldX, Sparkles, ChevronDown, ChevronUp,
-  AlertTriangle, Info, XCircle, CheckCircle, Loader2,
+  AlertTriangle, Info, XCircle, CheckCircle, Loader2, ArrowRight, Clock, MapPin,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { AuditReport, AuditViolation } from "@/lib/ai/fixture-auditor";
+import type { AuditReport, AuditViolation, MachineAction } from "@/lib/ai/fixture-auditor";
 
 type Props = {
   dryRunId: string;
   initialReport: AuditReport | null;
   onReportChange?: (report: AuditReport | null) => void;
+};
+
+const ACTION_LABELS: Partial<Record<MachineAction, { label: string; icon: React.ReactNode }>> = {
+  change_time: { label: "Editar horario", icon: <Clock className="h-3 w-3" /> },
+  change_court: { label: "Cambiar cancha", icon: <MapPin className="h-3 w-3" /> },
+  move_match: { label: "Mover partido", icon: <ArrowRight className="h-3 w-3" /> },
+  swap_match: { label: "Intercambiar", icon: <ArrowRight className="h-3 w-3" /> },
 };
 
 const STATUS_CONFIG = {
@@ -38,12 +46,21 @@ const STATUS_CONFIG = {
   },
 };
 
-function ViolationItem({ v }: { v: AuditViolation }) {
+function ViolationItem({ v, dryRunId }: { v: AuditViolation; dryRunId: string }) {
   const [expanded, setExpanded] = useState(false);
+  const router = useRouter();
   const icon =
     v.severity === "error" ? <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
     : v.severity === "warning" ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
     : <Info className="h-3.5 w-3.5 text-blue-500 shrink-0" />;
+
+  const action = v.machine_recommendation?.action;
+  const actionCfg = action && action !== "none" && action !== "ask_user" && action !== "regenerate"
+    ? ACTION_LABELS[action]
+    : null;
+
+  const explanationText = v.explanation_es?.trim();
+  const fixText = v.recommended_fix_es?.trim();
 
   return (
     <div className="border rounded-lg overflow-hidden text-xs">
@@ -52,20 +69,48 @@ function ViolationItem({ v }: { v: AuditViolation }) {
         onClick={() => setExpanded((e) => !e)}
       >
         {icon}
-        <span className="flex-1 font-medium leading-snug">{v.explanation_es}</span>
+        <span className="flex-1 font-medium leading-snug">
+          {explanationText || <span className="text-muted-foreground italic">Sin descripción</span>}
+        </span>
         {expanded ? <ChevronUp className="h-3 w-3 shrink-0 mt-0.5 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 shrink-0 mt-0.5 text-muted-foreground" />}
       </button>
       {expanded && (
-        <div className="px-3 pb-2 space-y-1 border-t bg-muted/20">
-          <p className="text-muted-foreground mt-1.5"><span className="font-semibold">Corrección:</span> {v.recommended_fix_es}</p>
-          {v.machine_recommendation?.action && v.machine_recommendation.action !== "none" && (
-            <p className="text-muted-foreground"><span className="font-semibold">Acción sugerida:</span> <code className="bg-muted px-1 rounded">{v.machine_recommendation.action}</code></p>
-          )}
-          {(v.affected_match_ids?.length ?? 0) > 0 && (
-            <p className="text-muted-foreground font-mono opacity-60">
-              Partidos: {v.affected_match_ids.join(", ")}
+        <div className="px-3 pb-3 space-y-2 border-t bg-muted/20">
+          {fixText && (
+            <p className="text-muted-foreground mt-1.5">
+              <span className="font-semibold">Corrección:</span> {fixText}
             </p>
           )}
+          {(v.affected_match_ids?.length ?? 0) > 0 && (
+            <p className="text-muted-foreground font-mono opacity-60 text-[10px]">
+              Partidos: {v.affected_match_ids.slice(0, 3).join(", ")}{v.affected_match_ids.length > 3 ? ` +${v.affected_match_ids.length - 3}` : ""}
+            </p>
+          )}
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 flex-wrap pt-0.5">
+            {actionCfg && (
+              <button
+                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-brand-500/10 text-brand-600 hover:bg-brand-500/20 transition-colors font-medium text-[10px]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  router.push(`/fixture?editMatch=${v.affected_match_ids[0] ?? ""}`);
+                }}
+              >
+                {actionCfg.icon}
+                {actionCfg.label}
+              </button>
+            )}
+            <button
+              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-muted hover:bg-muted/80 transition-colors text-muted-foreground text-[10px]"
+              onClick={(e) => {
+                e.stopPropagation();
+                router.push(`/dry-run/${dryRunId}/edit`);
+              }}
+            >
+              <ArrowRight className="h-3 w-3" />
+              Ir a edición manual
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -173,7 +218,7 @@ export function AuditPanel({ dryRunId, initialReport, onReportChange }: Props) {
       {/* Violations */}
       {report.violations.length > 0 && (
         <div className="space-y-1.5">
-          {displayed.map((v, i) => <ViolationItem key={i} v={v} />)}
+          {displayed.map((v, i) => <ViolationItem key={i} v={v} dryRunId={dryRunId} />)}
           {report.violations.length > 3 && (
             <button
               className="text-xs text-muted-foreground hover:text-foreground underline w-full text-center py-1"

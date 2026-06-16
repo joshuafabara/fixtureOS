@@ -22,6 +22,7 @@ export type DryRunMatchRow = {
   courtName: string | null;
   phase: string;
   roundIndex: number;
+  isPlaceholder?: boolean;
 };
 
 type Props = {
@@ -323,25 +324,36 @@ function CardsView({ rows, filter }: { rows: DryRunMatchRow[]; filter: string })
                 <p style={{ fontSize:13, color:"#64748b", margin:0 }}>{row.explanation}</p>
               ) : (
                 <div>
-                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
-                    <span style={{ fontWeight:700, fontSize:14, flex:1 }}>{row.homeTeamName || "—"}</span>
-                    <span style={{ fontSize:11, fontWeight:800, color:"#94a3b8", padding:"2px 8px", borderRadius:6, background:"#f1f5f9" }}>vs</span>
-                    <span style={{ fontWeight:700, fontSize:14, flex:1, textAlign:"right" }}>{row.awayTeamName || "—"}</span>
-                  </div>
+                  {row.isPlaceholder ? (
+                    <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
+                      <span style={{ fontWeight:700, fontSize:14, flex:1, color:"#94a3b8", fontStyle:"italic" }}>TBD</span>
+                      <span style={{ fontSize:11, fontWeight:800, color:"#94a3b8", padding:"2px 8px", borderRadius:6, background:"#f1f5f9" }}>vs</span>
+                      <span style={{ fontWeight:700, fontSize:14, flex:1, textAlign:"right", color:"#94a3b8", fontStyle:"italic" }}>TBD</span>
+                    </div>
+                  ) : (
+                    <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+                      <span style={{ fontWeight:700, fontSize:14, flex:1 }}>{row.homeTeamName || "—"}</span>
+                      <span style={{ fontSize:11, fontWeight:800, color:"#94a3b8", padding:"2px 8px", borderRadius:6, background:"#f1f5f9" }}>vs</span>
+                      <span style={{ fontWeight:700, fontSize:14, flex:1, textAlign:"right" }}>{row.awayTeamName || "—"}</span>
+                    </div>
+                  )}
                   <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-                    {row.scheduledDate && (
+                    {row.isPlaceholder && (
+                      <span style={{ fontSize:11, color:"#94a3b8", fontStyle:"italic" }}>Pendiente clasificación · fecha y cancha TBD</span>
+                    )}
+                    {!row.isPlaceholder && row.scheduledDate && (
                       <span style={{ display:"flex", alignItems:"center", gap:4, fontSize:12, color:"#64748b" }}>
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                         <span style={{ textTransform:"capitalize" }}>{formatDate(row.scheduledDate)}</span>
                       </span>
                     )}
-                    {row.startTime && (
+                    {!row.isPlaceholder && row.startTime && (
                       <span style={{ display:"flex", alignItems:"center", gap:4, fontSize:12, color:"#64748b" }}>
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                         {row.startTime.slice(0,5)} – {row.endTime?.slice(0,5) ?? "—"}
                       </span>
                     )}
-                    {row.courtName && (
+                    {!row.isPlaceholder && row.courtName && (
                       <span style={{ display:"flex", alignItems:"center", gap:4, fontSize:12, color:"#64748b" }}>
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="2.5"/></svg>
                         {row.courtName}
@@ -369,24 +381,26 @@ export function DryRunChangesViewer({ rows }: Props) {
   const [courtFilter, setCourtFilter] = useState("all");
   const [calVisible, setCalVisible]   = useState(6);
 
-  const addRows      = rows.filter((r) => r.changeType === "add");
-  const conflictRows = rows.filter((r) => r.changeType === "conflict");
-  const warningRows  = rows.filter((r) => r.changeType === "warning");
+  const addRows         = rows.filter((r) => r.changeType === "add");
+  const placeholderRows = addRows.filter((r) => r.isPlaceholder);
+  const scheduledRows   = addRows.filter((r) => !r.isPlaceholder);
+  const conflictRows    = rows.filter((r) => r.changeType === "conflict");
+  const warningRows     = rows.filter((r) => r.changeType === "warning");
 
-  // Derive unique dates and courts from proposed matches
+  // Derive unique dates and courts from scheduled (non-placeholder) matches
   const sortedDates = useMemo(() => {
-    const dates = addRows
+    const dates = scheduledRows
       .map((r) => r.scheduledDate)
       .filter((d): d is string => d !== null);
     return [...new Set(dates)].sort();
-  }, [addRows]);
+  }, [scheduledRows]);
 
   const allCourtNames = useMemo(() => {
-    const courts = addRows
+    const courts = scheduledRows
       .map((r) => r.courtName)
       .filter((c): c is string => c !== null);
     return [...new Set(courts)].sort();
-  }, [addRows]);
+  }, [scheduledRows]);
 
   const categories = useMemo(() => {
     const seen = new Map<string, { id: string; name: string; colorHex: string | null }>();
@@ -409,6 +423,13 @@ export function DryRunChangesViewer({ rows }: Props) {
     { key:"conflict", label:`Conflictos (${conflictRows.length})` },
     { key:"warning",  label:`Advertencias (${warningRows.length})` },
   ] as const;
+
+  const ROUND_LABELS: Record<string, string> = {
+    quarterfinal: "Cuartos de final",
+    semifinal: "Semifinal",
+    final: "Final",
+    "3rd_place": "Tercer puesto",
+  };
 
   const visibleCalDates = sortedDates.slice(0, calVisible);
 
@@ -535,6 +556,49 @@ export function DryRunChangesViewer({ rows }: Props) {
                     ({sortedDates.length - calVisible} restante{sortedDates.length - calVisible !== 1 ? "s" : ""})
                   </span>
                 </button>
+              </div>
+            )}
+
+            {/* Knockout placeholders */}
+            {placeholderRows.length > 0 && (
+              <div style={{ background:"#fff", border:"1px solid #e6eaf0", borderRadius:14, overflow:"hidden" }}>
+                <div style={{ padding:"14px 18px", borderBottom:"1px solid #e6eaf0", display:"flex", alignItems:"center", gap:8 }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/>
+                  </svg>
+                  <span style={{ fontWeight:800, fontSize:14 }}>Llaves / Playoffs</span>
+                  <span style={{ fontSize:12, color:"#94a3b8", marginLeft:4 }}>{placeholderRows.length} partido{placeholderRows.length !== 1 ? "s" : ""} · pendientes de clasificación</span>
+                </div>
+                <div style={{ padding:"16px", display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(200px,1fr))", gap:10 }}>
+                  {placeholderRows.filter((r) => activeCats.has(r.categoryId)).map((r) => {
+                    const s = catStyles(r.categoryColorHex);
+                    return (
+                      <div key={r.id} style={{
+                        border:`1px dashed ${s.border}`, borderRadius:12,
+                        background: s.bg, padding:"12px 14px",
+                        display:"flex", flexDirection:"column", gap:6,
+                      }}>
+                        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                          <span style={{ fontSize:11, fontWeight:800, color:s.text, textTransform:"uppercase", letterSpacing:"0.03em" }}>
+                            {ROUND_LABELS[r.phase] ?? r.phase}
+                          </span>
+                          <span style={{ fontSize:10, color:"#94a3b8" }}>M{r.roundIndex + 1}</span>
+                        </div>
+                        <div style={{ display:"flex", alignItems:"center", gap:8, color:"#94a3b8" }}>
+                          <span style={{ fontWeight:700, fontSize:13, flex:1, fontStyle:"italic" }}>TBD</span>
+                          <span style={{ fontSize:10, fontWeight:800, padding:"1px 6px", borderRadius:6, background:"#f1f5f9", color:"#94a3b8" }}>vs</span>
+                          <span style={{ fontWeight:700, fontSize:13, flex:1, textAlign:"right", fontStyle:"italic" }}>TBD</span>
+                        </div>
+                        <div style={{ fontSize:10.5, color:"#94a3b8" }}>
+                          <span style={{ display:"flex", alignItems:"center", gap:4 }}>
+                            <span style={{ width:6, height:6, borderRadius:99, background:s.dot }} />
+                            {r.categoryName}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 

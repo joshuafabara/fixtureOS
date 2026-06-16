@@ -25,6 +25,7 @@ type MatchData = {
   courtName?: string;
   phase?: string;
   roundIndex?: number;
+  isPlaceholder?: boolean;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -104,6 +105,7 @@ export default async function DryRunDetailPage({
       courtName: m.courtName ?? null,
       phase: m.phase ?? "regular",
       roundIndex: m.roundIndex ?? 0,
+      isPlaceholder: m.isPlaceholder ?? false,
     };
   });
 
