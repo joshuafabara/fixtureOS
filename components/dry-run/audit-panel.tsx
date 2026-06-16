@@ -132,6 +132,7 @@ function ViolationItem({ v, dryRunId }: { v: AuditViolation; dryRunId: string })
 }
 
 export function AuditPanel({ dryRunId, initialReport, onReportChange, onPatchesApplied }: Props) {
+  const router = useRouter();
   const [report, setReport] = useState<AuditReport | null>(initialReport);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -184,10 +185,13 @@ export function AuditPanel({ dryRunId, initialReport, onReportChange, onPatchesA
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error al aplicar cambios");
-      setApplyResult(`${data.applied.length} cambio(s) aplicado(s). Recarga la página para ver el resultado.`);
       setAiSuggestions(null);
       setAiRequest("");
+      setApplyResult(null);
       onPatchesApplied?.();
+      // Reload server-component match data, then re-audit with the fresh schedule
+      router.refresh();
+      await runAudit();
     } catch (e) {
       setApplyResult(e instanceof Error ? e.message : "Error al aplicar cambios");
     } finally {

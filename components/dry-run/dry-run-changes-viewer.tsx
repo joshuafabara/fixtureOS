@@ -44,10 +44,10 @@ function buildMatchInfoFromReport(
 ): Map<string, AuditMatchInfo> {
   if (!report) return new Map();
   const map = new Map<string, AuditMatchInfo>();
-
   const rowMap = new Map(rows.map((r) => [r.id, r]));
-  // All unique lowercase team names in the roster, for matching against violation text
-  const rosterNames = [
+
+  // All unique full lowercase team names, for full-name text matching
+  const rosterFullNames = [
     ...new Set(
       rows.flatMap((r) => [r.homeTeamName, r.awayTeamName]).filter(
         (n): n is string => !!n && n !== "—",
@@ -59,19 +59,39 @@ function buildMatchInfoFromReport(
     const label = v.explanation_es?.trim() || "";
     const labelLower = label.toLowerCase();
 
-    // Which roster team names explicitly appear in this violation's explanation?
-    const mentionedNames = rosterNames.filter((n) => labelLower.includes(n));
-    const isTeamSpecific = mentionedNames.length > 0;
+    // ── Layer 1: category scope filter ───────────────────────────────────────
+    // context_scope_id = the category where the restriction is DEFINED.
+    // A match from a different category cannot violate a restriction from another category.
+    const scopeId = v.context_scope_id;
+    const isCategoryScoped = v.context_source === "category" && !!scopeId;
+
+    // ── Layer 2: full-name team mention filter ────────────────────────────────
+    // If the violation label explicitly names specific full team names (e.g. "Spartans U14"),
+    // only flag matches that involve those exact teams.
+    const mentionedFullNames = rosterFullNames.filter((n) => labelLower.includes(n));
+    const isTeamSpecific = mentionedFullNames.length > 0;
 
     for (const id of (v.affected_match_ids ?? [])) {
       const row = rowMap.get(id);
-      if (!row) continue; // hallucinated ID — not in our match list
+      if (!row) continue; // hallucinated ID
 
-      // If the violation explicitly names specific teams, verify this match involves one of them
+      // Layer 1: reject if this match belongs to a different category than the restriction source
+      if (isCategoryScoped && row.categoryId !== scopeId) continue;
+
+      // Layer 2: reject if the violation mentions specific full team names and this match isn't one of them
       if (isTeamSpecific) {
-        const homeOk = row.homeTeamName !== "—" && mentionedNames.includes(row.homeTeamName.toLowerCase());
-        const awayOk = row.awayTeamName !== "—" && mentionedNames.includes(row.awayTeamName.toLowerCase());
-        if (!homeOk && !awayOk) continue; // GPT mapped this violation to the wrong match
+        const homeOk = row.homeTeamName !== "—" && mentionedFullNames.includes(row.homeTeamName.toLowerCase());
+        const awayOk = row.awayTeamName !== "—" && mentionedFullNames.includes(row.awayTeamName.toLowerCase());
+        if (!homeOk && !awayOk) continue;
+      }
+
+      // ── Layer 3: time-compliance check ───────────────────────────────────────
+      // For change_time violations: if the match's current startTime already satisfies
+      // the afterTime threshold, it doesn't actually violate — skip it.
+      if (v.machine_recommendation?.action === "change_time") {
+        const patch = v.machine_recommendation.patch as Record<string, unknown> | null;
+        const afterTime = patch?.newStartTime as string | undefined;
+        if (afterTime && row.startTime && row.startTime >= afterTime) continue;
       }
 
       const cur = map.get(id);

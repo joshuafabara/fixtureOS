@@ -36,6 +36,7 @@ export type AuditViolation = {
   severity: AuditViolationSeverity;
   type: AuditViolationType;
   context_source: AuditContextSource;
+  context_scope_id?: string; // categoryId or date string where restriction is DEFINED (not where matches are)
   human_prompt_excerpt: string;
   affected_match_ids: string[];
   affected_category_ids: string[];
@@ -192,6 +193,7 @@ Responde SOLO con JSON puro (sin markdown, sin texto adicional):
       "severity": "error" | "warning" | "info",
       "type": "constraint_conflict" | "context_missed" | "bad_game_mode" | "court_conflict" | "team_conflict" | "locked_match_changed" | "manual_override_ignored" | "schedule_preference_unmet" | "ambiguous_context",
       "context_source": "category" | "organization" | "tournament" | "date" | "locked_match" | "manual_override" | "system",
+      "context_scope_id": "OBLIGATORIO cuando context_source='category': el categoryId exacto de donde proviene la restricción (del array category_contexts). Cuando context_source='date': la fecha. En otros casos: omitir o null.",
       "human_prompt_excerpt": "cita LITERAL y breve de la regla en el contexto (ej: 'Jugar solo viernes entre 6pm y 9pm y sábados entre 8am y 6pm')",
       "affected_match_ids": ["id1", "id2"],
       "affected_category_ids": ["catId"],
@@ -295,6 +297,7 @@ export function mockAuditFixture(input: AuditInput): AuditReport {
         severity: "error",
         type: "constraint_conflict",
         context_source: "category",
+        context_scope_id: catId,
         human_prompt_excerpt: `Jugar solo ${catPlayDays.join(" y ")}`,
         affected_match_ids: badMatches.map((m) => m.id),
         affected_category_ids: [catId],
@@ -349,6 +352,7 @@ export function mockAuditFixture(input: AuditInput): AuditReport {
             severity: "error",
             type: "constraint_conflict",
             context_source: "category",
+            context_scope_id: catId,
             human_prompt_excerpt: `${restriction.target} después de las ${restriction.afterTime}`,
             affected_match_ids: [match.id],
             affected_category_ids: [catId],
@@ -365,6 +369,7 @@ export function mockAuditFixture(input: AuditInput): AuditReport {
             severity: "error",
             type: "constraint_conflict",
             context_source: "category",
+            context_scope_id: catId,
             human_prompt_excerpt: `${restriction.target} antes de las ${restriction.beforeTime}`,
             affected_match_ids: [match.id],
             affected_category_ids: [catId],
@@ -410,6 +415,7 @@ export function mockAuditFixture(input: AuditInput): AuditReport {
             severity: "error",
             type: "constraint_conflict",
             context_source: "category",
+            context_scope_id: catId,
             human_prompt_excerpt: `No más de un partido cada ${minDays} días`,
             affected_match_ids: [prev.id, curr.id],
             affected_category_ids: [catId],
@@ -723,6 +729,7 @@ function normalizeViolation(v: Record<string, any>): AuditViolation {
     severity: (v.severity ?? "info") as AuditViolationSeverity,
     type: (v.type ?? "context_missed") as AuditViolationType,
     context_source: (v.context_source ?? v.contextSource ?? v.source ?? "organization") as AuditContextSource,
+    context_scope_id: v.context_scope_id ?? v.contextScopeId ?? undefined,
     human_prompt_excerpt: String(v.human_prompt_excerpt ?? v.humanPromptExcerpt ?? v.prompt_excerpt ?? v.excerpt ?? ""),
     affected_match_ids: (v.affected_match_ids ?? v.affectedMatchIds ?? v.matchIds ?? []) as string[],
     affected_category_ids: (v.affected_category_ids ?? v.affectedCategoryIds ?? v.categoryIds ?? []) as string[],
@@ -831,8 +838,17 @@ export async function auditFixture(input: AuditInput): Promise<AuditReport> {
 
 export function hashAuditInput(input: AuditInput): string {
   const payload = JSON.stringify({
-    proposedMatches: input.proposedMatches.map((m) => m.id).sort(),
+    proposedMatches: input.proposedMatches
+      .map((m) => ({
+        id: m.id,
+        scheduledDate: m.scheduledDate,
+        startTime: m.startTime,
+        endTime: m.endTime,
+        courtId: m.courtId,
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
     parsedConstraints: input.parsedConstraints,
+    categoryParsedConstraints: input.categoryParsedConstraints ?? {},
   });
   return crypto.createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
