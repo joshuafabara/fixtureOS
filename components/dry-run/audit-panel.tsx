@@ -58,10 +58,10 @@ function ViolationItem({ v }: { v: AuditViolation }) {
       {expanded && (
         <div className="px-3 pb-2 space-y-1 border-t bg-muted/20">
           <p className="text-muted-foreground mt-1.5"><span className="font-semibold">Corrección:</span> {v.recommended_fix_es}</p>
-          {v.machine_recommendation.action !== "none" && (
+          {v.machine_recommendation?.action && v.machine_recommendation.action !== "none" && (
             <p className="text-muted-foreground"><span className="font-semibold">Acción sugerida:</span> <code className="bg-muted px-1 rounded">{v.machine_recommendation.action}</code></p>
           )}
-          {v.affected_match_ids.length > 0 && (
+          {(v.affected_match_ids?.length ?? 0) > 0 && (
             <p className="text-muted-foreground font-mono opacity-60">
               Partidos: {v.affected_match_ids.join(", ")}
             </p>

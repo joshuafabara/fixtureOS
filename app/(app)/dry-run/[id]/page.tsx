@@ -10,11 +10,9 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Zap, Plus, AlertTriangle, X, ArrowRight, RefreshCw,
-  CheckCircle, Calendar, Clock, Pin, ChevronLeft,
-} from "lucide-react";
+import { AlertTriangle, X, RefreshCw, ChevronLeft } from "lucide-react";
 import { DryRunActions } from "@/components/dry-run/dry-run-actions";
+import { DryRunChangesViewer, type DryRunMatchRow } from "@/components/dry-run/dry-run-changes-viewer";
 
 type MatchData = {
   categoryId?: string;
@@ -23,6 +21,7 @@ type MatchData = {
   date?: string;
   startTime?: string;
   endTime?: string;
+  courtId?: string;
   courtName?: string;
   phase?: string;
   roundIndex?: number;
@@ -38,10 +37,8 @@ const STATUS_BADGE: Record<string, "default" | "warning" | "success" | "error" |
 
 export default async function DryRunDetailPage({
   params,
-  searchParams,
 }: {
   params: { id: string };
-  searchParams: { filter?: string };
 }) {
   const orgId = await requireOrg();
 
@@ -59,13 +56,11 @@ export default async function DryRunDetailPage({
     .where(eq(tournaments.id, dryRun.tournamentId))
     .limit(1);
 
-  // Load changes
   const changes = await db
     .select()
     .from(dryRunChanges)
     .where(eq(dryRunChanges.dryRunId, dryRun.id));
 
-  // Build team name lookup
   const allTeams = await db
     .select({ id: teams.id, name: teams.name })
     .from(teams)
@@ -78,7 +73,7 @@ export default async function DryRunDetailPage({
     .where(eq(categories.organizationId, orgId));
   const catMap = new Map(allCategories.map((c) => [c.id, c]));
 
-  // Load most recent AI audit report for this dry run
+  // Load most recent AI audit report
   const [latestAudit] = await db
     .select()
     .from(aiAuditReports)
@@ -87,27 +82,39 @@ export default async function DryRunDetailPage({
     .limit(1);
   const initialAuditReport = (latestAudit?.reportJson ?? null) as AuditReport | null;
 
-  const addChanges = changes.filter((c) => c.changeType === "add");
+  // Resolve all change rows server-side for the client viewer
+  const resolvedRows: DryRunMatchRow[] = changes.map((change) => {
+    const m = (change.afterJson ?? {}) as MatchData;
+    const cat = m.categoryId ? catMap.get(m.categoryId) : null;
+    return {
+      id: change.entityId ?? change.id,
+      changeType: change.changeType,
+      severity: change.severity,
+      explanation: change.explanation,
+      categoryId: m.categoryId ?? "",
+      categoryName: cat?.name ?? "—",
+      categoryColorHex: cat?.colorHex ?? null,
+      homeTeamId: m.homeTeamId ?? null,
+      homeTeamName: m.homeTeamId ? (teamMap.get(m.homeTeamId) ?? m.homeTeamId.slice(0, 8)) : "—",
+      awayTeamId: m.awayTeamId ?? null,
+      awayTeamName: m.awayTeamId ? (teamMap.get(m.awayTeamId) ?? m.awayTeamId.slice(0, 8)) : "—",
+      scheduledDate: m.date ?? null,
+      startTime: m.startTime ?? null,
+      endTime: m.endTime ?? null,
+      courtName: m.courtName ?? null,
+      phase: m.phase ?? "regular",
+      roundIndex: m.roundIndex ?? 0,
+    };
+  });
+
+  const addChanges      = changes.filter((c) => c.changeType === "add");
   const conflictChanges = changes.filter((c) => c.changeType === "conflict");
-  const warningChanges = changes.filter((c) => c.changeType === "warning");
-
-  const hasConflicts = conflictChanges.length > 0;
-  const summary = (dryRun.summary ?? {}) as Record<string, unknown>;
-
-  const filter = searchParams.filter ?? "all";
-  const displayedChanges = filter === "added" ? addChanges
-    : filter === "conflict" ? conflictChanges
-    : filter === "warning" ? warningChanges
-    : changes;
-
-  function formatDate(dateStr: string) {
-    return new Date(dateStr + "T12:00:00").toLocaleDateString("es-EC", {
-      weekday: "short", day: "numeric", month: "short",
-    });
-  }
+  const warningChanges  = changes.filter((c) => c.changeType === "warning");
+  const hasConflicts    = conflictChanges.length > 0;
+  const summary         = (dryRun.summary ?? {}) as Record<string, unknown>;
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto pb-32">
+    <div className="p-6 space-y-6 max-w-7xl mx-auto pb-32">
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
@@ -139,137 +146,27 @@ export default async function DryRunDetailPage({
         </div>
       </div>
 
-      {/* Summary cards */}
+      {/* Stat chips */}
       <div className="flex gap-3 flex-wrap">
-        {([
-          { key: "added", label: "Añadidos", count: addChanges.length, icon: <Plus className="h-4 w-4" />, color: "text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800" },
-          { key: "conflict", label: "Conflictos", count: conflictChanges.length, icon: <AlertTriangle className="h-4 w-4" />, color: "text-red-600 bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800" },
-          { key: "warning", label: "Advertencias", count: warningChanges.length, icon: <AlertTriangle className="h-4 w-4" />, color: "text-amber-600 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800" },
-        ] as const).map(({ key, label, count, icon, color }) => (
-          <Link
-            key={key}
-            href={`/dry-run/${params.id}?filter=${filter === key ? "all" : key}`}
-            className={`flex-1 min-w-[140px] p-4 rounded-xl border cursor-pointer transition-all hover:shadow-sm ${
-              filter === key ? color : "bg-background border-border hover:border-foreground/20"
-            }`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <div className={filter === key ? "" : "text-muted-foreground"}>{icon}</div>
-              <span className="stat-num text-2xl font-bold">{count}</span>
-            </div>
-            <div className="text-sm font-medium text-muted-foreground">{label}</div>
-          </Link>
+        {[
+          { label: "Añadidos",    count: addChanges.length,      color: "text-emerald-700 bg-emerald-50 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800" },
+          { label: "Conflictos",  count: conflictChanges.length, color: "text-red-700 bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800" },
+          { label: "Advertencias",count: warningChanges.length,  color: "text-amber-700 bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800" },
+        ].map(({ label, count, color }) => (
+          <div key={label} className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${color}`}>
+            <span className="stat-num text-xl font-bold">{count}</span>
+            <span className="font-medium">{label}</span>
+          </div>
         ))}
       </div>
 
+      {/* Main layout */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
-        {/* Changes list */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-              {filter === "all" ? `${changes.length} cambios totales` : `${displayedChanges.length} ${filter === "added" ? "partidos añadidos" : filter === "conflict" ? "conflictos" : "advertencias"}`}
-            </h2>
-            {filter !== "all" && (
-              <Button variant="ghost" size="sm" asChild>
-                <Link href={`/dry-run/${params.id}`}>Ver todos</Link>
-              </Button>
-            )}
-          </div>
 
-          {displayedChanges.length === 0 ? (
-            <Card>
-              <CardContent className="py-8 text-center text-muted-foreground">
-                <CheckCircle className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                <p className="text-sm">Sin {filter === "conflict" ? "conflictos" : filter === "warning" ? "advertencias" : "cambios"}</p>
-              </CardContent>
-            </Card>
-          ) : (
-            displayedChanges.map((change, i) => {
-              const isConflict = change.changeType === "conflict";
-              const isWarning = change.changeType === "warning";
-              const match = change.afterJson as MatchData | null;
-              const cat = match?.categoryId ? catMap.get(match.categoryId) : null;
-              const homeName = match?.homeTeamId ? teamMap.get(match.homeTeamId) ?? match.homeTeamId.slice(0, 8) : "—";
-              const awayName = match?.awayTeamId ? teamMap.get(match.awayTeamId) ?? match.awayTeamId.slice(0, 8) : "—";
+        {/* Left: Calendar viewer (default) + cards toggle */}
+        <DryRunChangesViewer rows={resolvedRows} dryRunId={dryRun.id} />
 
-              return (
-                <Card
-                  key={change.id}
-                  className={`overflow-hidden ${
-                    isConflict ? "border-red-200 dark:border-red-800" : ""
-                  }`}
-                >
-                  <div className={`flex items-center gap-3 px-4 py-3 border-b flex-wrap ${
-                    isConflict ? "bg-red-50/50 dark:bg-red-900/10" : isWarning ? "bg-amber-50/50 dark:bg-amber-900/10" : "bg-muted/20"
-                  }`}>
-                    {isConflict ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 text-xs font-bold border border-red-200 dark:border-red-800">
-                        <AlertTriangle className="h-3 w-3" /> Conflicto
-                      </span>
-                    ) : isWarning ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-xs font-bold border border-amber-200 dark:border-amber-800">
-                        <AlertTriangle className="h-3 w-3" /> Advertencia
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-xs font-bold border border-emerald-200 dark:border-emerald-800">
-                        <Plus className="h-3 w-3" /> Añadido
-                      </span>
-                    )}
-                    {cat && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full" style={{ background: cat.colorHex ?? "#6b7280" }} />
-                        <span className="text-xs font-semibold text-muted-foreground">{cat.name}</span>
-                      </div>
-                    )}
-                    {!isConflict && !isWarning && match?.date && (
-                      <span className="ml-auto text-xs text-muted-foreground font-mono">
-                        Ronda {(match.roundIndex ?? 0) + 1}
-                      </span>
-                    )}
-                  </div>
-
-                  <CardContent className="py-3 px-4">
-                    {isConflict || isWarning ? (
-                      <p className="text-sm text-muted-foreground">{change.explanation}</p>
-                    ) : match ? (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm font-bold flex-1">{homeName}</span>
-                          <span className="text-xs text-muted-foreground px-2 py-0.5 rounded bg-muted font-bold">vs</span>
-                          <span className="text-sm font-bold flex-1 text-right">{awayName}</span>
-                        </div>
-                        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-                          {match.date && (
-                            <span className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
-                              <span className="capitalize">{formatDate(match.date)}</span>
-                            </span>
-                          )}
-                          {match.startTime && (
-                            <span className="flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {match.startTime} – {match.endTime}
-                            </span>
-                          )}
-                          {match.courtName && (
-                            <span className="flex items-center gap-1">
-                              <Pin className="h-3 w-3" />
-                              {match.courtName}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">{change.explanation}</p>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })
-          )}
-        </div>
-
-        {/* Right panel: eligibility + approve/reject */}
+        {/* Right panel */}
         <div className="space-y-4 lg:sticky lg:top-6">
           {/* Summary */}
           <Card>
@@ -279,11 +176,11 @@ export default async function DryRunDetailPage({
             <CardContent className="space-y-2 text-sm">
               {[
                 ["Categorías elegibles", String(summary.categoriesEligible ?? "—")],
-                ["Categorías omitidas", String(summary.categoriesSkipped ?? "—")],
-                ["Partidos programados", String(summary.matchesScheduled ?? addChanges.length)],
-                ["Sin slot disponible", String(summary.matchesUnscheduled ?? "0")],
-                ["Conflictos", String(conflictChanges.length)],
-                ["Advertencias", String(warningChanges.length)],
+                ["Categorías omitidas",  String(summary.categoriesSkipped  ?? "—")],
+                ["Partidos programados", String(summary.matchesScheduled   ?? addChanges.length)],
+                ["Sin slot disponible",  String(summary.matchesUnscheduled ?? "0")],
+                ["Conflictos",           String(conflictChanges.length)],
+                ["Advertencias",         String(warningChanges.length)],
               ].map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between py-1 border-b last:border-0">
                   <span className="text-muted-foreground">{label}</span>
