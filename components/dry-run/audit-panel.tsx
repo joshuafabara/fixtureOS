@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ShieldCheck, ShieldAlert, ShieldX, Sparkles, ChevronDown, ChevronUp,
-  AlertTriangle, Info, XCircle, CheckCircle, Loader2, ArrowRight, Clock, MapPin,
+  AlertTriangle, Info, XCircle, CheckCircle, Loader2, ArrowRight, Clock, MapPin, Target,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -81,13 +81,24 @@ function ViolationItem({ v, dryRunId }: { v: AuditViolation; dryRunId: string })
               <span className="font-semibold">Corrección:</span> {fixText}
             </p>
           )}
-          {(v.affected_match_ids?.length ?? 0) > 0 && (
-            <p className="text-muted-foreground font-mono opacity-60 text-[10px]">
-              Partidos: {v.affected_match_ids.slice(0, 3).join(", ")}{v.affected_match_ids.length > 3 ? ` +${v.affected_match_ids.length - 3}` : ""}
-            </p>
-          )}
           {/* Action buttons */}
           <div className="flex items-center gap-2 flex-wrap pt-0.5">
+            {v.affected_match_ids?.slice(0, 5).map((id, i) => (
+              <button
+                key={id}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-muted hover:bg-muted/80 transition-colors text-muted-foreground text-[10px] font-medium"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  window.dispatchEvent(new CustomEvent("audit-focus-match", { detail: id }));
+                }}
+              >
+                <Target className="h-3 w-3" />
+                {(v.affected_match_ids?.length ?? 0) > 1 ? `Partido ${i + 1}` : "Ver partido"}
+              </button>
+            ))}
+            {(v.affected_match_ids?.length ?? 0) > 5 && (
+              <span className="text-[10px] text-muted-foreground">+{v.affected_match_ids.length - 5} más</span>
+            )}
             {actionCfg && (
               <button
                 className="inline-flex items-center gap-1 px-2 py-1 rounded bg-brand-500/10 text-brand-600 hover:bg-brand-500/20 transition-colors font-medium text-[10px]"
@@ -137,6 +148,7 @@ export function AuditPanel({ dryRunId, initialReport, onReportChange }: Props) {
       const r = data.report as AuditReport;
       setReport(r);
       onReportChange?.(r);
+      window.dispatchEvent(new CustomEvent("audit-report-updated", { detail: r }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error de conexión");
     } finally {

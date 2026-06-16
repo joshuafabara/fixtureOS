@@ -1,6 +1,8 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, Plus, Check } from "lucide-react";
+import type { AuditReport } from "@/lib/ai/fixture-auditor";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -25,10 +27,64 @@ export type DryRunMatchRow = {
   isPlaceholder?: boolean;
 };
 
+export type AuditMatchInfo = {
+  severity: "error" | "warning";
+  labels: string[];
+};
+
 type Props = {
   rows: DryRunMatchRow[];
   dryRunId: string;
+  initialAuditReport?: AuditReport | null;
 };
+
+function buildMatchInfoFromReport(
+  report: AuditReport | null,
+  rows: DryRunMatchRow[],
+): Map<string, AuditMatchInfo> {
+  if (!report) return new Map();
+  const map = new Map<string, AuditMatchInfo>();
+
+  const rowMap = new Map(rows.map((r) => [r.id, r]));
+  // All unique lowercase team names in the roster, for matching against violation text
+  const rosterNames = [
+    ...new Set(
+      rows.flatMap((r) => [r.homeTeamName, r.awayTeamName]).filter(
+        (n): n is string => !!n && n !== "—",
+      ),
+    ),
+  ].map((n) => n.toLowerCase());
+
+  for (const v of report.violations) {
+    const label = v.explanation_es?.trim() || "";
+    const labelLower = label.toLowerCase();
+
+    // Which roster team names explicitly appear in this violation's explanation?
+    const mentionedNames = rosterNames.filter((n) => labelLower.includes(n));
+    const isTeamSpecific = mentionedNames.length > 0;
+
+    for (const id of (v.affected_match_ids ?? [])) {
+      const row = rowMap.get(id);
+      if (!row) continue; // hallucinated ID — not in our match list
+
+      // If the violation explicitly names specific teams, verify this match involves one of them
+      if (isTeamSpecific) {
+        const homeOk = row.homeTeamName !== "—" && mentionedNames.includes(row.homeTeamName.toLowerCase());
+        const awayOk = row.awayTeamName !== "—" && mentionedNames.includes(row.awayTeamName.toLowerCase());
+        if (!homeOk && !awayOk) continue; // GPT mapped this violation to the wrong match
+      }
+
+      const cur = map.get(id);
+      if (!cur) {
+        map.set(id, { severity: v.severity === "error" ? "error" : "warning", labels: label ? [label] : [] });
+      } else {
+        if (v.severity === "error" && cur.severity === "warning") cur.severity = "error";
+        if (label && !cur.labels.includes(label)) cur.labels.push(label);
+      }
+    }
+  }
+  return map;
+}
 
 // ── Calendar constants ─────────────────────────────────────────────────────────
 
@@ -102,13 +158,27 @@ function SegTabs({ value, onChange, options }: {
 
 // ── Calendar view ──────────────────────────────────────────────────────────────
 
-function CalendarDayView({ dayKey, matches, courtNames, activeCats, courtFilter }: {
+function CalendarDayView({ dayKey, matches, courtNames, activeCats, courtFilter, auditInfo }: {
   dayKey: string;
   matches: DryRunMatchRow[];
   courtNames: string[];
   activeCats: Set<string>;
   courtFilter: string;
+  auditInfo: Map<string, AuditMatchInfo>;
 }) {
+  const [openBadge, setOpenBadge] = useState<{ id: string; docX: number; docY: number; text: string; sev: "error" | "warning" } | null>(null);
+
+  useEffect(() => {
+    if (!openBadge) return;
+    function close() { setOpenBadge(null); }
+    document.addEventListener("click", close);
+    document.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("scroll", close, true);
+    };
+  }, [openBadge]);
+
   const visibleCourts = courtFilter === "all"
     ? courtNames
     : courtNames.filter((c) => c === courtFilter);
@@ -203,21 +273,55 @@ function CalendarDayView({ dayKey, matches, courtNames, activeCats, courtFilter 
                   const top    = toTop(startMins);
                   const height = Math.max(ROW_H - 4, toPx(endMins - startMins) - 4);
                   const s = catStyles(m.categoryColorHex);
+                  const info = auditInfo.get(m.id);
+                  const flagColor = info?.severity === "error" ? "#dc2626" : "#d97706";
                   return (
-                    <div key={m.id} style={{
-                      position:"absolute", top: top + 2, left:5, right:5, height,
-                      background: s.bg, border:`1px solid ${s.border}`,
-                      borderLeft:`3px solid ${s.borderLeft}`,
-                      borderRadius:8, padding:"5px 8px", overflow:"hidden",
-                    }}>
+                    <div
+                      key={m.id}
+                      id={`match-${m.id}`}
+                      style={{
+                        position:"absolute", top: top + 2, left:5, right:5, height,
+                        background: s.bg,
+                        border:`1px solid ${info ? (info.severity === "error" ? "#fca5a5" : "#fcd34d") : s.border}`,
+                        borderLeft:`3px solid ${s.borderLeft}`,
+                        borderRadius:8, padding:"5px 8px", overflow:"hidden",
+                        boxShadow: info ? `0 0 0 2px ${info.severity === "error" ? "rgba(220,38,38,.18)" : "rgba(217,119,6,.18)"}` : "none",
+                        transition:"box-shadow .2s",
+                      }}
+                    >
                       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                         <span style={{ fontFamily:"var(--font-mono)", fontSize:11.5, fontWeight:700, color:s.text }}>
                           {fmtTime(m.startTime)}
                         </span>
-                        <span style={{
-                          fontSize:10, fontWeight:700, padding:"1px 5px", borderRadius:99,
-                          background:"rgba(16,185,129,.15)", color:"#059669",
-                        }}>+</span>
+                        <div style={{ display:"flex", alignItems:"center", gap:3 }}>
+                          {info && (
+                            <span
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (openBadge?.id === m.id) { setOpenBadge(null); return; }
+                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setOpenBadge({
+                                  id: m.id,
+                                  docX: rect.left + window.scrollX,
+                                  docY: rect.bottom + window.scrollY,
+                                  text: info.labels.length > 0 ? info.labels.join("\n") : "Violación IA detectada",
+                                  sev: info.severity,
+                                });
+                              }}
+                              style={{
+                                width:14, height:14, borderRadius:"50%", flexShrink:0,
+                                background: flagColor,
+                                display:"inline-flex", alignItems:"center", justifyContent:"center",
+                                fontSize:9, fontWeight:900, color:"#fff", lineHeight:1,
+                                cursor:"pointer",
+                              }}
+                            >!</span>
+                          )}
+                          <span style={{
+                            fontSize:10, fontWeight:700, padding:"1px 5px", borderRadius:99,
+                            background:"rgba(16,185,129,.15)", color:"#059669",
+                          }}>+</span>
+                        </div>
                       </div>
                       <div style={{ fontSize:11.5, fontWeight:700, color:"#131c2e", lineHeight:1.3, marginTop:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
                         {m.homeTeamName || "—"}
@@ -233,13 +337,46 @@ function CalendarDayView({ dayKey, matches, courtNames, activeCats, courtFilter 
           })}
         </div>
       </div>
+
+      {/* Portal tooltip — position:absolute in document coords so it scrolls with the match card */}
+      {openBadge && typeof document !== "undefined" && createPortal(
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position:"absolute",
+            top: openBadge.docY + 8,
+            left: Math.min(openBadge.docX, (typeof window !== "undefined" ? window.innerWidth + window.scrollX - 240 : 600)),
+            zIndex:1000,
+            background:"#1e293b",
+            color:"#f1f5f9",
+            borderRadius:10,
+            padding:"10px 12px",
+            fontSize:12,
+            fontFamily:"var(--font-sans)",
+            fontWeight:500,
+            lineHeight:1.5,
+            maxWidth:230,
+            boxShadow:"0 8px 24px rgba(0,0,0,.35)",
+            whiteSpace:"pre-line",
+            pointerEvents:"none",
+          }}
+        >
+          <div style={{ fontSize:10, fontWeight:700, opacity:.6, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.06em" }}>
+            {openBadge.sev === "error" ? "Error IA" : "Advertencia IA"}
+          </div>
+          {openBadge.text}
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
 
 // ── Cards view (existing list design) ─────────────────────────────────────────
 
-function CardsView({ rows, filter }: { rows: DryRunMatchRow[]; filter: string }) {
+function CardsView({ rows, filter, auditInfo }: { rows: DryRunMatchRow[]; filter: string; auditInfo: Map<string, AuditMatchInfo> }) {
+  const [openBadgeId, setOpenBadgeId] = useState<string | null>(null);
+
   const displayed = filter === "added"   ? rows.filter((r) => r.changeType === "add")
                   : filter === "conflict" ? rows.filter((r) => r.changeType === "conflict")
                   : filter === "warning"  ? rows.filter((r) => r.changeType === "warning")
@@ -265,12 +402,21 @@ function CardsView({ rows, filter }: { rows: DryRunMatchRow[]; filter: string })
         const isConflict = row.changeType === "conflict";
         const isWarning  = row.changeType === "warning";
         const s = catStyles(row.categoryColorHex);
+        const info = auditInfo.get(row.id);
+        const auditFlagColor = info?.severity === "error" ? "#dc2626" : "#d97706";
+        const tooltip = info ? (info.labels.length > 0 ? info.labels.join("\n") : "Violación IA detectada") : "";
 
         return (
-          <div key={row.id} style={{
-            background:"#fff", border:`1px solid ${isConflict ? "#fecaca" : "#e6eaf0"}`,
-            borderRadius:12, overflow:"hidden",
-          }}>
+          <div
+            key={row.id}
+            id={`match-${row.id}`}
+            style={{
+              background:"#fff",
+              border:`1px solid ${info ? (info.severity === "error" ? "#fca5a5" : "#fcd34d") : isConflict ? "#fecaca" : "#e6eaf0"}`,
+              borderRadius:12, overflow:"hidden",
+              boxShadow: info ? `0 0 0 2px ${info.severity === "error" ? "rgba(220,38,38,.12)" : "rgba(217,119,6,.12)"}` : "none",
+            }}
+          >
             {/* Row header */}
             <div style={{
               display:"flex", alignItems:"center", gap:10, padding:"10px 14px",
@@ -311,12 +457,45 @@ function CardsView({ rows, filter }: { rows: DryRunMatchRow[]; filter: string })
                   {row.categoryName}
                 </span>
               )}
+              {info && (
+                <span
+                  onClick={(e) => { e.stopPropagation(); setOpenBadgeId(openBadgeId === row.id ? null : row.id); }}
+                  style={{
+                    display:"inline-flex", alignItems:"center", gap:4, padding:"2px 8px",
+                    borderRadius:99, fontSize:11, fontWeight:700,
+                    background: info.severity === "error" ? "#fef2f2" : "#fffbeb",
+                    border: `1px solid ${auditFlagColor}`,
+                    color: auditFlagColor,
+                    cursor:"pointer",
+                    userSelect:"none",
+                  }}
+                >
+                  <span style={{ fontWeight:900 }}>!</span>
+                  {info.severity === "error" ? "Error IA" : "Advertencia IA"}
+                </span>
+              )}
               {!isConflict && !isWarning && row.scheduledDate && (
                 <span style={{ marginLeft:"auto", fontSize:11, color:"#94a3b8", fontFamily:"var(--font-mono)" }}>
                   Ronda {row.roundIndex + 1}
                 </span>
               )}
             </div>
+
+            {/* Audit tooltip — inline, shown on badge click */}
+            {openBadgeId === row.id && info && (
+              <div style={{
+                padding:"10px 14px",
+                background: info.severity === "error" ? "#1e293b" : "#1e293b",
+                color:"#f1f5f9",
+                fontSize:12, fontFamily:"var(--font-sans)", fontWeight:500,
+                lineHeight:1.5, whiteSpace:"pre-line",
+              }}>
+                <span style={{ fontSize:10, fontWeight:700, opacity:.6, textTransform:"uppercase", letterSpacing:"0.06em", display:"block", marginBottom:3 }}>
+                  {info.severity === "error" ? "Error IA" : "Advertencia IA"}
+                </span>
+                {tooltip}
+              </div>
+            )}
 
             {/* Row body */}
             <div style={{ padding:"12px 14px" }}>
@@ -372,7 +551,18 @@ function CardsView({ rows, filter }: { rows: DryRunMatchRow[]; filter: string })
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function DryRunChangesViewer({ rows }: Props) {
+function highlightEl(el: HTMLElement | null) {
+  if (!el) return;
+  el.animate(
+    [
+      { outline: "3px solid #f59e0b", outlineOffset: "3px", opacity: 1 },
+      { outline: "3px solid transparent", outlineOffset: "3px", opacity: 1 },
+    ],
+    { duration: 1600, easing: "ease-out" }
+  );
+}
+
+export function DryRunChangesViewer({ rows, initialAuditReport }: Props) {
   const [view, setView]         = useState<"calendar" | "cards">("calendar");
   const [filter, setFilter]     = useState<"all" | "added" | "conflict" | "warning">("all");
   const [activeCats, setActiveCats] = useState<Set<string>>(() =>
@@ -380,6 +570,66 @@ export function DryRunChangesViewer({ rows }: Props) {
   );
   const [courtFilter, setCourtFilter] = useState("all");
   const [calVisible, setCalVisible]   = useState(6);
+  const [auditInfo, setAuditInfo]     = useState<Map<string, AuditMatchInfo>>(() =>
+    buildMatchInfoFromReport(initialAuditReport ?? null, rows)
+  );
+
+  // Refs to avoid stale closures in event handlers
+  const calVisibleRef  = useRef(calVisible);
+  const sortedDatesRef = useRef<string[]>([]);
+  const viewRef        = useRef(view);
+  const pendingScrollId = useRef<string | null>(null);
+
+  useEffect(() => { calVisibleRef.current = calVisible; }, [calVisible]);
+  useEffect(() => { viewRef.current = view; }, [view]);
+
+  useEffect(() => {
+    function handler(e: Event) {
+      setAuditInfo(buildMatchInfoFromReport((e as CustomEvent<AuditReport>).detail, rows));
+    }
+    window.addEventListener("audit-report-updated", handler);
+    return () => window.removeEventListener("audit-report-updated", handler);
+  }, [rows]);
+
+  // Handle scroll-to-match requests from AuditPanel
+  useEffect(() => {
+    function handler(e: Event) {
+      const matchId = (e as CustomEvent<string>).detail;
+      const row = rows.find((r) => r.id === matchId);
+
+      if (row?.scheduledDate && viewRef.current === "calendar") {
+        const dates = sortedDatesRef.current;
+        const dateIdx = dates.indexOf(row.scheduledDate);
+        if (dateIdx >= 0 && dateIdx >= calVisibleRef.current) {
+          pendingScrollId.current = matchId;
+          setCalVisible(dateIdx + 1);
+          return;
+        }
+      }
+      // Already visible — scroll immediately
+      const el = document.getElementById(`match-${matchId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        highlightEl(el);
+      }
+    }
+    window.addEventListener("audit-focus-match", handler);
+    return () => window.removeEventListener("audit-focus-match", handler);
+  }, [rows]);
+
+  // After calVisible expands, execute the pending scroll
+  useEffect(() => {
+    if (!pendingScrollId.current) return;
+    const id = pendingScrollId.current;
+    pendingScrollId.current = null;
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`match-${id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        highlightEl(el);
+      }
+    });
+  }, [calVisible]);
 
   const addRows         = rows.filter((r) => r.changeType === "add");
   const placeholderRows = addRows.filter((r) => r.isPlaceholder);
@@ -394,6 +644,9 @@ export function DryRunChangesViewer({ rows }: Props) {
       .filter((d): d is string => d !== null);
     return [...new Set(dates)].sort();
   }, [scheduledRows]);
+
+  // Keep ref in sync so the event handler always sees the current dates list
+  useEffect(() => { sortedDatesRef.current = sortedDates; }, [sortedDates]);
 
   const allCourtNames = useMemo(() => {
     const courts = scheduledRows
@@ -538,6 +791,7 @@ export function DryRunChangesViewer({ rows }: Props) {
                 courtNames={allCourtNames}
                 activeCats={activeCats}
                 courtFilter={courtFilter}
+                auditInfo={auditInfo}
               />
             ))}
             {sortedDates.length > calVisible && (
@@ -631,7 +885,7 @@ export function DryRunChangesViewer({ rows }: Props) {
           </div>
         )
       ) : (
-        <CardsView rows={rows} filter={filter} />
+        <CardsView rows={rows} filter={filter} auditInfo={auditInfo} />
       )}
     </div>
   );

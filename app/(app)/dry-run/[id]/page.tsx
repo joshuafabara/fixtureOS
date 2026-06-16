@@ -163,7 +163,7 @@ export default async function DryRunDetailPage({
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
 
         {/* Left: Calendar viewer (default) + cards toggle */}
-        <DryRunChangesViewer rows={resolvedRows} dryRunId={dryRun.id} />
+        <DryRunChangesViewer rows={resolvedRows} dryRunId={dryRun.id} initialAuditReport={initialAuditReport} />
 
         {/* Right panel */}
         <div className="space-y-4 lg:sticky lg:top-6">

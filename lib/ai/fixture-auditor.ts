@@ -221,7 +221,13 @@ REGLAS CRÍTICAS:
 - explanation_es NUNCA puede ser "" — siempre debe tener texto descriptivo
 - recommended_fix_es NUNCA puede ser "" — siempre debe tener acción concreta
 - Si encuentras múltiples partidos que violan la misma regla, agrúpalos en UNA violación con todos los affected_match_ids y explain todos en explanation_es
-- summary_es debe ser específico: mencionar qué categorías y cuántos partidos tienen problemas`;
+- summary_es debe ser específico: mencionar qué categorías y cuántos partidos tienen problemas
+
+VERIFICACIÓN DE IDs (CRÍTICO — evita errores de mapeo):
+- Al incluir un ID en affected_match_ids, SIEMPRE verifica que el campo homeTeamName o awayTeamName del partido con ese ID efectivamente corresponde al equipo mencionado en explanation_es
+- Por ejemplo: si la violación es sobre "Spartans U14", solo incluye IDs de partidos donde homeTeamName="Spartans U14" o awayTeamName="Spartans U14"
+- NUNCA incluyas IDs de partidos de otros equipos aunque estén en la misma semana o categoría
+- Si no puedes confirmar el UUID exacto, omite ese partido del affected_match_ids en lugar de incluir un ID incorrecto`;
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
