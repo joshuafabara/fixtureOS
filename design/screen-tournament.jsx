@@ -87,6 +87,7 @@ function TournamentScreen() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, flex: "0 0 auto", flexWrap: "wrap" }}>
+          <Btn variant="ghost" icon="edit" onClick={() => nav("edittournament")}>Editar</Btn>
           <Btn variant="ghost" icon="download" onClick={() => nav("exports")}>Exportar</Btn>
           <Btn variant="primary" icon="zap" onClick={() => nav("dryrun")}>Generar Dry Run</Btn>
         </div>
@@ -97,6 +98,15 @@ function TournamentScreen() {
       </div>
 
       {tab === "resumen" && (
+        <>
+        {/* Top action CTAs */}
+        <Card style={{ padding: 12, marginBottom: 16 }}>
+          <div className="tbl-scroll" style={{ display: "flex", gap: 9, overflowX: "auto" }}>
+            {[["Crear Fixture", "zap", "primary", () => nav("builder")], ["Importar Datos", "upload", "soft", () => nav("import")], ["Actualizar Datos", "refresh", "ghost", () => nav("import")], ["Continuar Setup", "layers", "ghost", () => nav("setup")], ["Ver Historial de Importaciones", "history", "ghost", () => nav("imports")]].map(([lb, ic, v, fn], i) => (
+              <Btn key={i} variant={v} size="md" icon={ic} onClick={fn} style={{ flex: "0 0 auto" }}>{lb}</Btn>
+            ))}
+          </div>
+        </Card>
         <div style={{ display: "grid", gridTemplateColumns: narrow ? "minmax(0,1fr)" : "minmax(0,1fr) 340px", gap: 16, alignItems: "start" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Card>
@@ -129,6 +139,24 @@ function TournamentScreen() {
               </div>
             </Card>
             <Card>
+              <CardHead title="Salud de los datos" icon="target" right={<Btn variant="subtle" size="sm" icon="upload" onClick={() => nav("import")}>Actualizar</Btn>} />
+              <div style={{ padding: "6px 0" }}>
+                {DATA_HEALTH.map((h, i) => (
+                  <button key={i} onClick={() => nav(h.screen)} style={{ display: "flex", alignItems: "center", gap: 11, width: "100%", padding: "10px 18px", border: "none", borderBottom: "1px solid var(--line)", background: "transparent", cursor: "pointer", fontFamily: "var(--font-sans)", textAlign: "left" }}>
+                    <span style={{ width: 26, height: 26, borderRadius: 7, background: `color-mix(in srgb, ${h.tone} 13%, transparent)`, color: h.tone, display: "grid", placeItems: "center", flex: "0 0 auto" }}><Icon name={h.ic} size={14} /></span>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-soft)", flex: 1, minWidth: 0 }}>{h.label}</span>
+                    <span className="mono tnum" style={{ fontSize: 16, fontWeight: 800, color: h.n > 0 ? h.tone : "var(--text-mute)" }}>{h.n}</span>
+                    <Icon name="chevright" size={14} style={{ color: "var(--text-mute)", flex: "0 0 auto" }} />
+                  </button>
+                ))}
+                <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "11px 18px" }}>
+                  <span style={{ width: 26, height: 26, borderRadius: 7, background: "var(--accent-soft)", color: "var(--accent)", display: "grid", placeItems: "center", flex: "0 0 auto" }}><Icon name="upload" size={14} /></span>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-soft)", flex: 1, minWidth: 0 }}>Última importación</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-mute)" }} className="mono">Excel · V2 · hace 2 d</span>
+                </div>
+              </div>
+            </Card>
+            <Card>
               <CardHead title="Versiones recientes" icon="history" right={<span onClick={() => setTab("versiones")} style={{ fontSize: 12, fontWeight: 700, color: "var(--accent)", cursor: "pointer" }}>Historial</span>} />
               <div style={{ padding: "8px 0" }}>
                 {VERSIONS.slice(0, 4).map((v, i) => (
@@ -142,6 +170,7 @@ function TournamentScreen() {
             </Card>
           </div>
         </div>
+        </>
       )}
 
       {tab === "categorias" && (

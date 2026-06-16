@@ -35,6 +35,8 @@ export type SchedulerCategory = {
   priority?: number; // higher = scheduled earlier
   teamTimeConstraints?: TeamTimeConstraint[]; // per-team earliest-start-time restrictions
   minDaysBetweenMatches?: number; // minimum calendar days between any two matches for same team
+  allowedDays?: number[];           // 0=Sun … 6=Sat; from category/tournament/org playDays
+  timeWindow?: { start: string; end: string }; // HH:MM bounds from category context
 };
 
 export type ScheduledMatchResult = {
@@ -74,6 +76,11 @@ function toMinutes(t: string): number {
 }
 function fromMinutes(m: number): string {
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/** Day of week for a YYYY-MM-DD string (0=Sun … 6=Sat). Uses noon to avoid DST issues. */
+function dateDayOfWeek(date: string): number {
+  return new Date(date + "T12:00:00").getDay();
 }
 
 /** Calendar days between two YYYY-MM-DD strings (always positive). */
@@ -191,6 +198,18 @@ export function scheduleMatches(
       for (const slot of sortedSlots) {
         // Respect category start date
         if (slot.date < cat.startDate) continue;
+
+        // Enforce category-level allowed days of week
+        if (cat.allowedDays?.length && !cat.allowedDays.includes(dateDayOfWeek(slot.date))) continue;
+
+        // Enforce category-level time window (match must fit completely within window)
+        if (cat.timeWindow) {
+          const slotStartMin  = toMinutes(slot.startTime);
+          const windowStartMin = toMinutes(cat.timeWindow.start);
+          const windowEndMin   = toMinutes(cat.timeWindow.end);
+          const dur = cat.matchDurationMinutes ?? 60;
+          if (slotStartMin < windowStartMin || slotStartMin + dur > windowEndMin) continue;
+        }
 
         // Enforce per-team earliest-start-time restrictions (afterTime)
         const homeAfterTime = afterTimeMap.get(homeTeam.id);

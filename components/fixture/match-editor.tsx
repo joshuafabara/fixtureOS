@@ -1,18 +1,18 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
-  Clock, Pin, Calendar, Edit2, ArrowLeftRight, Zap,
-  CheckCircle2, AlertTriangle, Loader2, ChevronDown, ChevronUp, Lock,
+  AlertTriangle, CheckCircle2, Loader2, ArrowLeftRight,
+  ChevronLeft, RefreshCw, Zap, Lock, MapPin, Clock, Edit2,
 } from "lucide-react";
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 export type MatchData = {
   id: string;
@@ -33,14 +33,6 @@ export type MatchData = {
 
 export type CourtData = { id: string; name: string };
 
-type Props = {
-  versionId: string;
-  tournamentId: string;
-  versionNumber: number;
-  matches: MatchData[];
-  courts: CourtData[];
-};
-
 type PendingEdit = {
   date: string | null;
   startTime: string | null;
@@ -51,38 +43,98 @@ type PendingEdit = {
   changeType: "move" | "forfeit" | "unforfeit" | "swap_part" | "court_change";
 };
 
-type EditForm = {
-  date: string;
-  startTime: string;
-  endTime: string;
-  courtId: string;
+type Props = {
+  versionId: string;
+  tournamentId: string;
+  tournamentName: string;
+  versionNumber: number;
+  versionState: string;
+  matches: MatchData[];
+  courts: CourtData[];
 };
 
-const PHASE_LABEL: Record<string, string> = {
-  group: "Grupos", semifinal: "Semifinal", final: "Final", quarterfinal: "Cuartos",
+// ── Board constants ────────────────────────────────────────────────────────────
+
+const B_SLOT_MIN  = 7 * 60;
+const B_SLOT_MAX  = 22 * 60;
+const B_SLOT_STEP = 30;
+const B_ROW_H     = 38;
+
+const STATE_LABEL: Record<string, string> = {
+  draft: "borrador", published: "publicado", archived: "archivado",
 };
 
-function formatDate(d: string) {
+function minToTime(m: number): string {
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+function timeToMins(t: string): number {
+  const [h, min] = t.split(":").map(Number);
+  return h * 60 + (min || 0);
+}
+function catStyle(hex: string | null) {
+  const h = hex ?? "#64748b";
+  const r = parseInt(h.slice(1, 3), 16);
+  const g = parseInt(h.slice(3, 5), 16);
+  const b = parseInt(h.slice(5, 7), 16);
+  return {
+    bg:        `rgba(${r},${g},${b},0.13)`,
+    border:    `rgba(${r},${g},${b},0.32)`,
+    dot:       h,
+    text:      h,
+    selShadow: `0 0 0 3px rgba(${r},${g},${b},0.28), 0 2px 8px rgba(0,0,0,.10)`,
+  };
+}
+function fmtDayFull(d: string) {
   return new Date(d + "T12:00:00").toLocaleDateString("es-EC", {
     weekday: "long", day: "numeric", month: "long",
   });
 }
+function fmtDayShort(d: string) {
+  return new Date(d + "T12:00:00").toLocaleDateString("es-EC", {
+    weekday: "short", day: "numeric", month: "short",
+  });
+}
 
-export function MatchEditor({ versionId, tournamentId, versionNumber, matches, courts }: Props) {
+// ── Component ──────────────────────────────────────────────────────────────────
+
+export function MatchEditor({
+  versionId, tournamentId, tournamentName,
+  versionNumber, versionState, matches, courts,
+}: Props) {
   const router = useRouter();
-  const courtMap = useMemo(() => new Map(courts.map((c) => [c.id, c.name])), [courts]);
 
   const [pendingEdits, setPendingEdits] = useState<Map<string, PendingEdit>>(new Map());
+  const [selectedId,   setSelectedId]   = useState<string | null>(null);
   const [swapSourceId, setSwapSourceId] = useState<string | null>(null);
-  const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<EditForm>({ date: "", startTime: "", endTime: "", courtId: "" });
-  const [catFilter, setCatFilter] = useState<string | null>(null);
-  const [showPending, setShowPending] = useState(true);
-  const [commitReason, setCommitReason] = useState("");
-  const [showCommitDialog, setShowCommitDialog] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState("");
-  const [successWarnings, setSuccessWarnings] = useState<string[] | null>(null);
+  const [dragId,       setDragId]       = useState<string | null>(null);
+  const [currentDate,  setCurrentDate]  = useState<string | null>(null);
+  const [showCommitDialog,  setShowCommitDialog]  = useState(false);
+  const [commitReason,      setCommitReason]      = useState("");
+  const [submitting,        setSubmitting]        = useState(false);
+  const [submitError,       setSubmitError]       = useState("");
+  const [successWarnings,   setSuccessWarnings]   = useState<string[] | null>(null);
+  const [generatingDryRun,  setGeneratingDryRun]  = useState(false);
+  const grabRef = useRef(0);
+
+  const handleGenerateDryRun = useCallback(async () => {
+    setGeneratingDryRun(true);
+    try {
+      const res = await fetch("/api/dry-run/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tournamentId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error al generar");
+      router.push(`/dry-run/${data.dryRunId}`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Error al generar dry run");
+    } finally {
+      setGeneratingDryRun(false);
+    }
+  }, [tournamentId, router]);
+
+  // ── Effective state (pending edits applied) ────────────────────────────────
 
   function getEffective(m: MatchData): MatchData & { pending?: PendingEdit } {
     const edit = pendingEdits.get(m.id);
@@ -99,145 +151,151 @@ export function MatchEditor({ versionId, tournamentId, versionNumber, matches, c
     };
   }
 
-  // Group by effective date
-  const byDate = useMemo(() => {
-    const map = new Map<string, (MatchData & { pending?: PendingEdit })[]>();
-    const filtered = catFilter ? matches.filter((m) => m.categoryId === catFilter) : matches;
-    for (const m of filtered) {
-      const eff = getEffective(m);
-      const key = eff.scheduledDate ?? "sin-fecha";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(eff);
-    }
-    // Sort matches within each date by startTime
-    for (const [, arr] of map) {
-      arr.sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
-    }
-    return map;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matches, pendingEdits, catFilter]);
+  const allEffective = useMemo(() => matches.map(getEffective), [matches, pendingEdits]);
 
-  const sortedDates = [...byDate.keys()].sort();
+  // ── Conflict detection ─────────────────────────────────────────────────────
 
-  // Unique categories for filter
-  const allCategories = useMemo(() => {
-    const seen = new Map<string, { id: string; name: string | null; colorHex: string | null }>();
-    for (const m of matches) {
-      if (!seen.has(m.categoryId)) seen.set(m.categoryId, { id: m.categoryId, name: m.categoryName, colorHex: m.categoryColorHex });
+  const conflictIds = useMemo(() => {
+    const seen: Record<string, string> = {};
+    const bad = new Set<string>();
+    for (const m of allEffective) {
+      if (!m.scheduledDate || !m.startTime || !m.courtId) continue;
+      const k = `${m.courtId}@${m.scheduledDate}@${m.startTime.slice(0, 5)}`;
+      if (seen[k]) { bad.add(m.id); bad.add(seen[k]); } else seen[k] = m.id;
     }
-    return [...seen.values()];
-  }, [matches]);
+    return bad;
+  }, [allEffective]);
 
-  function openEditDialog(m: MatchData) {
-    const eff = getEffective(m);
-    setEditForm({
-      date: eff.scheduledDate ?? "",
-      startTime: eff.startTime?.slice(0, 5) ?? "",
-      endTime: eff.endTime?.slice(0, 5) ?? "",
-      courtId: eff.courtId ?? "",
-    });
-    setEditingMatchId(m.id);
+  const conflictsCount = conflictIds.size / 2;
+
+  // ── Sorted dates ───────────────────────────────────────────────────────────
+
+  const sortedDates = useMemo(() => {
+    const dates = new Set<string>();
+    for (const m of allEffective) { if (m.scheduledDate) dates.add(m.scheduledDate); }
+    return [...dates].sort();
+  }, [allEffective]);
+
+  const activeDate = currentDate ?? sortedDates[0] ?? null;
+
+  const dayMatches = useMemo(
+    () => (activeDate ? allEffective.filter((m) => m.scheduledDate === activeDate) : []),
+    [allEffective, activeDate],
+  );
+
+  // ── Dynamic slot range for current day ────────────────────────────────────
+
+  const [dynSlotMin, dynSlotMax] = useMemo(() => {
+    const starts = dayMatches.filter((m) => m.startTime).map((m) => timeToMins(m.startTime!));
+    const ends   = dayMatches.map((m) =>
+      m.endTime ? timeToMins(m.endTime) : m.startTime ? timeToMins(m.startTime) + 90 : 0,
+    );
+    const minT = starts.length
+      ? Math.max(B_SLOT_MIN, Math.floor((Math.min(...starts) - 60) / 60) * 60)
+      : B_SLOT_MIN;
+    const maxT = ends.length
+      ? Math.min(B_SLOT_MAX, Math.ceil((Math.max(...ends) + 60) / 60) * 60)
+      : B_SLOT_MIN + 10 * 60;
+    return [minT, maxT];
+  }, [dayMatches]);
+
+  const slots = useMemo(() => {
+    const a: number[] = [];
+    for (let m = dynSlotMin; m < dynSlotMax; m += B_SLOT_STEP) a.push(m);
+    return a;
+  }, [dynSlotMin, dynSlotMax]);
+
+  function toTop(mins: number) {
+    return ((mins - dynSlotMin) / B_SLOT_STEP) * B_ROW_H;
   }
 
-  function applyEdit() {
-    if (!editingMatchId) return;
-    const original = matches.find((m) => m.id === editingMatchId);
-    if (!original) return;
+  // ── Patch helper ───────────────────────────────────────────────────────────
 
-    const newCourtName = editForm.courtId ? (courtMap.get(editForm.courtId) ?? null) : null;
-    const dateChanged = editForm.date !== (original.scheduledDate ?? "");
-    const timeChanged =
-      editForm.startTime !== (original.startTime?.slice(0, 5) ?? "") ||
-      editForm.endTime !== (original.endTime?.slice(0, 5) ?? "");
-    const courtChanged = editForm.courtId !== (original.courtId ?? "");
-
-    const changeType = courtChanged && !dateChanged && !timeChanged
-      ? "court_change"
-      : "move";
-
-    const newEdits = new Map(pendingEdits);
-    newEdits.set(editingMatchId, {
-      date: editForm.date || null,
-      startTime: editForm.startTime ? `${editForm.startTime}:00` : null,
-      endTime: editForm.endTime ? `${editForm.endTime}:00` : null,
-      courtId: editForm.courtId || null,
-      courtName: newCourtName,
-      status: (pendingEdits.get(editingMatchId)?.status ?? original.status) as "scheduled" | "forfeit",
-      changeType,
-    });
-    setPendingEdits(newEdits);
-    setEditingMatchId(null);
+  function applyPatch(matchId: string, patch: Partial<PendingEdit>) {
+    const orig   = matches.find((m) => m.id === matchId)!;
+    const existing = pendingEdits.get(matchId);
+    const base: PendingEdit = existing ?? {
+      date:       orig.scheduledDate,
+      startTime:  orig.startTime,
+      endTime:    orig.endTime,
+      courtId:    orig.courtId,
+      courtName:  orig.courtName,
+      status:     orig.status as "scheduled" | "forfeit",
+      changeType: "move",
+    };
+    const next = new Map(pendingEdits);
+    next.set(matchId, { ...base, ...patch });
+    setPendingEdits(next);
   }
 
-  function handleSwap(matchId: string) {
-    if (swapSourceId === null) {
-      setSwapSourceId(matchId);
-      return;
-    }
-    if (swapSourceId === matchId) {
-      setSwapSourceId(null);
-      return;
-    }
+  // ── Drag & drop ───────────────────────────────────────────────────────────
 
-    const sourceMatch = matches.find((m) => m.id === swapSourceId)!;
-    const targetMatch = matches.find((m) => m.id === matchId)!;
-    const effSource = getEffective(sourceMatch);
-    const effTarget = getEffective(targetMatch);
+  function handleDrop(courtId: string, courtName: string, e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    if (!dragId) return;
+    const m = allEffective.find((x) => x.id === dragId);
+    if (!m || m.isLocked) { setDragId(null); return; }
 
-    const newEdits = new Map(pendingEdits);
-    newEdits.set(swapSourceId, {
-      date: effTarget.scheduledDate,
-      startTime: effTarget.startTime,
-      endTime: effTarget.endTime,
-      courtId: effTarget.courtId,
-      courtName: effTarget.courtName,
-      status: (effSource.status === "forfeit" ? "forfeit" : "scheduled") as "scheduled" | "forfeit",
+    const colTop = e.currentTarget.getBoundingClientRect().top;
+    const y = e.clientY - colTop - grabRef.current;
+    let slotIdx = Math.round(y / B_ROW_H);
+    slotIdx = Math.max(0, Math.min(slots.length - 2, slotIdx));
+    const newMin = slots[slotIdx] ?? dynSlotMin;
+
+    const origStart = m.startTime ? timeToMins(m.startTime) : dynSlotMin;
+    const origEnd   = m.endTime   ? timeToMins(m.endTime)   : origStart + 60;
+    const duration  = origEnd - origStart;
+    const newSt = minToTime(newMin) + ":00";
+    const newEt = minToTime(newMin + duration) + ":00";
+
+    if (newSt !== m.startTime || courtId !== m.courtId) {
+      applyPatch(dragId, { startTime: newSt, endTime: newEt, courtId, courtName, changeType: "move" });
+      setSelectedId(dragId);
+    }
+    setDragId(null);
+  }
+
+  // ── Swap ───────────────────────────────────────────────────────────────────
+
+  function handleSwapClick(matchId: string) {
+    if (!swapSourceId) { setSwapSourceId(matchId); return; }
+    if (swapSourceId === matchId) { setSwapSourceId(null); return; }
+
+    const src = allEffective.find((m) => m.id === swapSourceId)!;
+    const tgt = allEffective.find((m) => m.id === matchId)!;
+    const next = new Map(pendingEdits);
+    next.set(swapSourceId, {
+      date: tgt.scheduledDate, startTime: tgt.startTime, endTime: tgt.endTime,
+      courtId: tgt.courtId, courtName: tgt.courtName,
+      status: (src.status === "forfeit" ? "forfeit" : "scheduled") as "scheduled" | "forfeit",
       changeType: "swap_part",
     });
-    newEdits.set(matchId, {
-      date: effSource.scheduledDate,
-      startTime: effSource.startTime,
-      endTime: effSource.endTime,
-      courtId: effSource.courtId,
-      courtName: effSource.courtName,
-      status: (effTarget.status === "forfeit" ? "forfeit" : "scheduled") as "scheduled" | "forfeit",
+    next.set(matchId, {
+      date: src.scheduledDate, startTime: src.startTime, endTime: src.endTime,
+      courtId: src.courtId, courtName: src.courtName,
+      status: (tgt.status === "forfeit" ? "forfeit" : "scheduled") as "scheduled" | "forfeit",
       changeType: "swap_part",
     });
-    setPendingEdits(newEdits);
+    setPendingEdits(next);
     setSwapSourceId(null);
   }
 
-  function handleForfeit(m: MatchData) {
-    const current = pendingEdits.get(m.id);
-    const currentStatus = current?.status ?? m.status;
-    const newStatus = currentStatus === "forfeit" ? "scheduled" : "forfeit";
-    const newEdits = new Map(pendingEdits);
-    const existing = current ?? {
-      date: m.scheduledDate,
-      startTime: m.startTime,
-      endTime: m.endTime,
-      courtId: m.courtId,
-      courtName: m.courtName,
-    };
-    newEdits.set(m.id, {
-      ...existing,
-      status: newStatus,
-      changeType: newStatus === "forfeit" ? "forfeit" : "unforfeit",
-    });
-    setPendingEdits(newEdits);
+  // ── Forfeit ────────────────────────────────────────────────────────────────
+
+  function handleForfeit(id: string) {
+    const m   = matches.find((x) => x.id === id)!;
+    const cur = pendingEdits.get(id)?.status ?? m.status;
+    const newS: "scheduled" | "forfeit" = cur === "forfeit" ? "scheduled" : "forfeit";
+    applyPatch(id, { status: newS, changeType: newS === "forfeit" ? "forfeit" : "unforfeit" });
   }
 
-  function removePendingEdit(matchId: string) {
-    const newEdits = new Map(pendingEdits);
-    newEdits.delete(matchId);
-    setPendingEdits(newEdits);
-  }
+  // ── Commit ─────────────────────────────────────────────────────────────────
 
   async function handleCommit() {
     if (pendingEdits.size === 0) return;
     setSubmitting(true);
     setSubmitError("");
-
     const changes = Array.from(pendingEdits.entries()).map(([matchId, edit]) => ({
       matchId,
       newDate: edit.date,
@@ -247,27 +305,21 @@ export function MatchEditor({ versionId, tournamentId, versionNumber, matches, c
       newStatus: edit.status ?? "scheduled",
       changeType: edit.changeType,
     }));
-
     try {
-      const res = await fetch(`/api/fixture-versions/${versionId}/edit`, {
+      const res  = await fetch(`/api/fixture-versions/${versionId}/edit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           changes,
-          reason: commitReason || `Edición manual desde V${versionNumber} (${changes.length} cambio${changes.length > 1 ? "s" : ""})`,
+          reason: commitReason || `Edición manual V${versionNumber} (${changes.length} cambio${changes.length > 1 ? "s" : ""})`,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error al confirmar");
-
       if (data.warnings?.length > 0) {
         setSuccessWarnings(data.warnings);
         setShowCommitDialog(false);
-        // Show warnings then navigate
-        setTimeout(() => {
-          router.push(`/fixture/${tournamentId}?v=${data.versionNumber}`);
-          router.refresh();
-        }, 3000);
+        setTimeout(() => { router.push(`/fixture/${tournamentId}?v=${data.versionNumber}`); router.refresh(); }, 3000);
       } else {
         router.push(`/fixture/${tournamentId}?v=${data.versionNumber}`);
         router.refresh();
@@ -279,366 +331,570 @@ export function MatchEditor({ versionId, tournamentId, versionNumber, matches, c
     }
   }
 
-  const editingMatch = editingMatchId ? matches.find((m) => m.id === editingMatchId) : null;
+  // ── Inspector helpers ──────────────────────────────────────────────────────
+
+  const selectedMatch = selectedId ? allEffective.find((m) => m.id === selectedId) : null;
+
+  const timeSlotOptions = useMemo(() => {
+    const opts: string[] = [];
+    for (let m = 7 * 60; m <= 21 * 60 - 30; m += 30) opts.push(minToTime(m));
+    return opts;
+  }, []);
+
+  function onCourtChange(newCourtId: string) {
+    if (!selectedId) return;
+    const court = courts.find((c) => c.id === newCourtId);
+    applyPatch(selectedId, { courtId: newCourtId, courtName: court?.name ?? null, changeType: "court_change" });
+  }
+
+  function onTimeChange(newT: string) {
+    if (!selectedId) return;
+    const m = allEffective.find((x) => x.id === selectedId)!;
+    const newMin    = timeToMins(newT);
+    const origStart = m.startTime ? timeToMins(m.startTime) : dynSlotMin;
+    const origEnd   = m.endTime   ? timeToMins(m.endTime)   : origStart + 60;
+    applyPatch(selectedId, {
+      startTime: newT + ":00",
+      endTime:   minToTime(newMin + (origEnd - origStart)) + ":00",
+      changeType: "move",
+    });
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-4">
-      {/* Success warnings banner */}
-      {successWarnings && (
-        <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-2">
-          <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-semibold text-sm">
-            <AlertTriangle className="h-4 w-4" />
-            Cambios aplicados con advertencias — redirigiendo…
-          </div>
-          {successWarnings.map((w, i) => (
-            <p key={i} className="text-xs text-amber-700 dark:text-amber-400">{w}</p>
-          ))}
-        </div>
-      )}
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f8fafc" }}>
 
-      {/* Swap mode banner */}
-      {swapSourceId && (
-        <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-3 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-blue-700 dark:text-blue-400 text-sm font-medium">
-            <ArrowLeftRight className="h-4 w-4" />
-            Selecciona el segundo partido para intercambiar slots
-          </div>
-          <Button variant="outline" size="sm" onClick={() => setSwapSourceId(null)}>
-            Cancelar
-          </Button>
-        </div>
-      )}
-
-      {/* Pending changes summary */}
-      {pendingEdits.size > 0 && (
-        <div className="rounded-xl border border-brand-200 dark:border-brand-800 bg-brand-50/50 dark:bg-brand-900/10">
-          <button
-            className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-brand-700 dark:text-brand-400"
-            onClick={() => setShowPending((p) => !p)}
-          >
-            <span className="flex items-center gap-2">
-              <Edit2 className="h-4 w-4" />
-              {pendingEdits.size} cambio{pendingEdits.size !== 1 ? "s" : ""} pendiente{pendingEdits.size !== 1 ? "s" : ""}
+      {/* ── Sub-topbar ── */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12,
+        padding: "11px 20px", borderBottom: "1px solid #e6eaf0",
+        background: "#fff", flexWrap: "wrap", flexShrink: 0,
+      }}>
+        <Link href={`/fixture/${tournamentId}`} style={{
+          width: 32, height: 32, borderRadius: 8, border: "1px solid #e6eaf0",
+          background: "#fff", display: "grid", placeItems: "center",
+          color: "#64748b", textDecoration: "none", flexShrink: 0,
+        }}>
+          <ChevronLeft size={17} />
+        </Link>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+            <h1 style={{ fontSize: 18, fontWeight: 800, letterSpacing: -0.5, margin: 0 }}>
+              Edición manual
+            </h1>
+            <span style={{
+              fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 99,
+              background: "rgba(16,185,129,.12)", color: "#059669",
+              fontFamily: "var(--font-mono)", whiteSpace: "nowrap",
+            }}>
+              V{versionNumber} · {STATE_LABEL[versionState] ?? versionState}
             </span>
-            {showPending ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+          {activeDate && (
+            <div style={{ fontSize: 12, color: "#76869b", marginTop: 2, textTransform: "capitalize" }}>
+              {fmtDayFull(activeDate)} · arrastrá los partidos para reprogramar
+            </div>
+          )}
+        </div>
+
+        <div style={{ flex: 1 }} />
+
+        {/* Conflict status */}
+        <span style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          fontSize: 12.5, fontWeight: 700,
+          color: conflictsCount > 0 ? "#dc2626" : "#10b981",
+        }}>
+          {conflictsCount > 0
+            ? <AlertTriangle size={14} strokeWidth={2.2} />
+            : <CheckCircle2 size={14} strokeWidth={2.2} />}
+          {conflictsCount > 0
+            ? `${conflictsCount} conflicto${conflictsCount > 1 ? "s" : ""}`
+            : "Sin conflictos"}
+        </span>
+
+        <span style={{ fontSize: 12.5, color: "#76869b", fontWeight: 700 }}>
+          {pendingEdits.size} cambio{pendingEdits.size !== 1 ? "s" : ""}
+        </span>
+
+        <button
+          onClick={() => { setPendingEdits(new Map()); setSwapSourceId(null); setSelectedId(null); }}
+          disabled={pendingEdits.size === 0}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "7px 13px", borderRadius: 8, border: "1px solid #e6eaf0",
+            background: "#fff", fontSize: 12.5, fontWeight: 700,
+            color: pendingEdits.size === 0 ? "#94a3b8" : "#475569",
+            cursor: pendingEdits.size === 0 ? "default" : "pointer",
+          }}
+        >
+          <RefreshCw size={12} />
+          Deshacer todo
+        </button>
+
+        {pendingEdits.size > 0 ? (
+          <button
+            onClick={() => { setSubmitError(""); setShowCommitDialog(true); }}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "7px 16px", borderRadius: 8,
+              background: "linear-gradient(135deg,#10b981,#059669)",
+              border: "none", fontSize: 12.5, fontWeight: 700, color: "#fff",
+              cursor: "pointer", boxShadow: "0 2px 8px rgba(16,185,129,.35)",
+            }}
+          >
+            <CheckCircle2 size={13} />
+            Confirmar cambios
           </button>
-          {showPending && (
-            <div className="border-t divide-y">
-              {Array.from(pendingEdits.entries()).map(([matchId, edit]) => {
-                const m = matches.find((x) => x.id === matchId);
-                if (!m) return null;
+        ) : (
+          <button
+            onClick={handleGenerateDryRun}
+            disabled={generatingDryRun}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "7px 16px", borderRadius: 8,
+              background: "linear-gradient(135deg,#10b981,#059669)",
+              border: "none", fontSize: 12.5, fontWeight: 700, color: "#fff",
+              cursor: generatingDryRun ? "wait" : "pointer",
+              opacity: generatingDryRun ? 0.75 : 1,
+              boxShadow: "0 2px 8px rgba(16,185,129,.35)",
+            }}
+          >
+            {generatingDryRun ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Zap size={13} />}
+            {generatingDryRun ? "Generando…" : "Previsualizar Dry Run"}
+          </button>
+        )}
+      </div>
+
+      {/* ── Main area ── */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+
+        {/* ── Board ── */}
+        <div style={{ flex: 1, overflow: "auto", padding: "16px 20px" }}>
+
+          {/* Swap banner */}
+          {swapSourceId && (
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "10px 16px", borderRadius: 12, marginBottom: 14,
+              background: "rgba(99,102,241,.08)", border: "1px solid rgba(99,102,241,.25)",
+            }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700, color: "#6366f1" }}>
+                <ArrowLeftRight size={14} />
+                Seleccioná el segundo partido para intercambiar
+              </span>
+              <button
+                onClick={() => setSwapSourceId(null)}
+                style={{ fontSize: 12, fontWeight: 600, color: "#64748b", border: "1px solid #e6eaf0", background: "#fff", borderRadius: 8, padding: "5px 12px", cursor: "pointer" }}
+              >
+                Cancelar
+              </button>
+            </div>
+          )}
+
+          {/* Success warning banner */}
+          {successWarnings && (
+            <div style={{ marginBottom: 14, padding: "12px 16px", borderRadius: 12, background: "#fffbeb", border: "1px solid #fde68a" }}>
+              <div style={{ fontWeight: 700, color: "#d97706", fontSize: 13, marginBottom: 4 }}>
+                Cambios aplicados con advertencias — redirigiendo…
+              </div>
+              {successWarnings.map((w, i) => <p key={i} style={{ margin: 0, fontSize: 12, color: "#92400e" }}>{w}</p>)}
+            </div>
+          )}
+
+          {/* Day tabs */}
+          {sortedDates.length > 1 && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              {sortedDates.map((d) => {
+                const active = d === activeDate;
                 return (
-                  <div key={matchId} className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
-                    <span className="text-xs font-semibold flex-1 min-w-0 truncate">
-                      {m.homeTeamName} vs {m.awayTeamName}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {edit.changeType === "forfeit" ? "→ Forfeit"
-                        : edit.changeType === "unforfeit" ? "→ Restaurado"
-                        : edit.changeType === "swap_part" ? "→ Intercambiado"
-                        : edit.changeType === "court_change" ? `→ Cancha ${edit.courtName ?? "?"}`
-                        : `→ ${edit.date ?? "?"} ${edit.startTime?.slice(0, 5) ?? ""}`}
-                    </span>
-                    <button
-                      onClick={() => removePendingEdit(matchId)}
-                      className="text-xs text-muted-foreground hover:text-foreground underline shrink-0"
-                    >
-                      Deshacer
-                    </button>
+                  <button key={d} onClick={() => setCurrentDate(d)} style={{
+                    padding: "6px 14px", borderRadius: 10, fontSize: 12.5, fontWeight: 700,
+                    border: `1px solid ${active ? "#10b981" : "#e6eaf0"}`,
+                    background: active ? "rgba(16,185,129,.10)" : "#fff",
+                    color: active ? "#059669" : "#64748b",
+                    cursor: "pointer", textTransform: "capitalize",
+                  }}>
+                    {fmtDayShort(d)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Board grid */}
+          {courts.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "60px", color: "#94a3b8", fontSize: 14 }}>
+              Sin canchas configuradas.
+            </div>
+          ) : (
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: `58px repeat(${courts.length}, minmax(150px,1fr))`,
+              background: "#fff", border: "1px solid #e6eaf0",
+              borderRadius: 14, overflow: "hidden", minWidth: 400,
+            }}>
+              {/* Header row */}
+              <div style={{ borderBottom: "1px solid #e6eaf0", borderRight: "1px solid #e6eaf0", background: "#f8fafc", height: 42 }} />
+              {courts.map((court) => (
+                <div key={court.id} style={{
+                  padding: "11px 12px", borderBottom: "1px solid #e6eaf0", borderRight: "1px solid #e6eaf0",
+                  background: "#f8fafc", fontWeight: 800, fontSize: 12.5,
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                  <MapPin size={13} color="#10b981" />
+                  {court.name}
+                </div>
+              ))}
+
+              {/* Time column */}
+              <div style={{ position: "relative", borderRight: "1px solid #e6eaf0" }}>
+                {slots.map((s) => {
+                  const isHour = s % 60 === 0;
+                  return (
+                    <div key={s} style={{ height: B_ROW_H, borderBottom: isHour ? "1px solid #e6eaf0" : "1px dashed #f1f5f9", position: "relative" }}>
+                      {isHour && (
+                        <span style={{
+                          position: "absolute", top: -8, right: 7,
+                          fontSize: 10.5, color: "#94a3b8", fontWeight: 600,
+                          fontFamily: "var(--font-mono)", background: "#fff", padding: "0 2px",
+                        }}>
+                          {minToTime(s)}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Court lanes */}
+              {courts.map((court) => {
+                const lane = dayMatches.filter((m) => m.courtId === court.id);
+                return (
+                  <div
+                    key={court.id}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => handleDrop(court.id, court.name, e)}
+                    style={{
+                      position: "relative", borderRight: "1px solid #e6eaf0",
+                      background: dragId ? "rgba(16,185,129,.04)" : "transparent",
+                      transition: "background .1s",
+                    }}
+                  >
+                    {slots.map((s) => (
+                      <div key={s} style={{ height: B_ROW_H, borderBottom: s % 60 === 0 ? "1px solid #e6eaf0" : "1px dashed #f1f5f9" }} />
+                    ))}
+                    {lane.map((m) => {
+                      if (!m.startTime) return null;
+                      const startMin  = timeToMins(m.startTime);
+                      const endMin    = m.endTime ? timeToMins(m.endTime) : startMin + 60;
+                      const top       = toTop(startMin);
+                      const height    = Math.max(B_ROW_H - 4, ((endMin - startMin) / B_SLOT_STEP) * B_ROW_H - 4);
+                      const s         = catStyle(m.categoryColorHex);
+                      const isConflict = conflictIds.has(m.id);
+                      const isSel      = m.id === selectedId;
+                      const isSwapSrc  = m.id === swapSourceId;
+                      const isSwapTgt  = swapSourceId !== null && swapSourceId !== m.id;
+                      const isForfeit  = (pendingEdits.get(m.id)?.status ?? m.status) === "forfeit";
+                      const hasPending = pendingEdits.has(m.id);
+                      return (
+                        <div
+                          key={m.id}
+                          draggable={!m.isLocked}
+                          onDragStart={(e) => { setDragId(m.id); grabRef.current = e.nativeEvent.offsetY; }}
+                          onDragEnd={() => setDragId(null)}
+                          onClick={() => {
+                            if (swapSourceId) { handleSwapClick(m.id); return; }
+                            setSelectedId(m.id === selectedId ? null : m.id);
+                          }}
+                          style={{
+                            position: "absolute", top: top + 2, left: 5, right: 5, height,
+                            background: isConflict ? "rgba(254,202,202,.5)" : isForfeit ? "#f1f5f9" : s.bg,
+                            border: `1.5px solid ${isConflict ? "#fca5a5" : isSwapTgt ? "#6366f1" : s.border}`,
+                            borderLeft: `3px solid ${isConflict ? "#dc2626" : isSwapSrc ? "#6366f1" : s.dot}`,
+                            borderRadius: 9, padding: "5px 8px", overflow: "hidden",
+                            cursor: m.isLocked ? "not-allowed" : swapSourceId ? "pointer" : "grab",
+                            boxShadow: isSel ? s.selShadow : "none",
+                            opacity: dragId === m.id ? 0.4 : isForfeit ? 0.55 : 1,
+                            userSelect: "none", transition: "box-shadow .12s, border .1s",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, color: isConflict ? "#dc2626" : s.text }}>
+                              {m.startTime?.slice(0, 5)}
+                            </span>
+                            <span style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                              {m.isLocked   && <Lock      size={10} color="#94a3b8" />}
+                              {hasPending && !m.isLocked && <Edit2   size={10} color={s.dot} />}
+                              {isConflict    && <AlertTriangle size={11} color="#dc2626" />}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11.5, fontWeight: 700, color: "#131c2e", lineHeight: 1.25, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {m.homeTeamName ?? "—"}
+                          </div>
+                          <div style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.25, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            vs {m.awayTeamName ?? "—"}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}
             </div>
           )}
         </div>
-      )}
 
-      {/* Category filter */}
-      {allCategories.length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-muted-foreground font-medium shrink-0">Filtrar:</span>
-          <button
-            onClick={() => setCatFilter(null)}
-            className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
-              !catFilter ? "bg-foreground text-background border-foreground" : "border-border hover:border-foreground/40"
-            }`}
-          >
-            Todos
-          </button>
-          {allCategories.map((cat) => (
-            <button
-              key={cat.id}
-              onClick={() => setCatFilter(catFilter === cat.id ? null : cat.id)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                catFilter === cat.id ? "bg-foreground text-background border-foreground" : "border-border hover:border-foreground/40"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.colorHex ?? "#6b7280" }} />
-              {cat.name}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Match list by date */}
-      {sortedDates.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
-            <p className="text-sm">Sin partidos.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-5">
-          {sortedDates.map((dateStr) => {
-            const dayMatches = byDate.get(dateStr)!;
-            const isUndated = dateStr === "sin-fecha";
-            return (
-              <div key={dateStr}>
-                <div className="flex items-center gap-3 mb-2">
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
-                  <h2 className="text-sm font-semibold capitalize">
-                    {isUndated ? "Sin fecha asignada" : formatDate(dateStr)}
-                  </h2>
-                  <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                    {dayMatches.length} partido{dayMatches.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-                <Card>
-                  <CardContent className="p-0 divide-y">
-                    {dayMatches.map((m) => {
-                      const isSwapSource = m.id === swapSourceId;
-                      const isSwapTarget = swapSourceId !== null && swapSourceId !== m.id;
-                      const hasPending = pendingEdits.has(m.id);
-                      const currentStatus = (pendingEdits.get(m.id)?.status ?? m.status);
-                      const isForfeit = currentStatus === "forfeit";
-
-                      return (
-                        <div
-                          key={m.id}
-                          className={`flex items-center gap-2 px-4 py-3 flex-wrap transition-colors ${
-                            isSwapSource ? "bg-blue-50 dark:bg-blue-900/20" : ""
-                          } ${isSwapTarget ? "hover:bg-blue-50/50 dark:hover:bg-blue-900/10" : ""}`}
-                        >
-                          {/* Time */}
-                          <div className="flex items-center gap-1 text-xs text-muted-foreground font-mono w-16 shrink-0">
-                            <Clock className="h-3 w-3 shrink-0" />
-                            {m.startTime?.slice(0, 5) ?? "—"}
-                          </div>
-
-                          {/* Court */}
-                          <div className="flex items-center gap-1 text-xs text-muted-foreground w-24 shrink-0">
-                            <Pin className="h-3 w-3 shrink-0" />
-                            {m.courtName ?? "—"}
-                          </div>
-
-                          {/* Category */}
-                          <div className="flex items-center gap-1.5 w-24 shrink-0">
-                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: m.categoryColorHex ?? "#6b7280" }} />
-                            <span className="text-xs font-medium text-muted-foreground truncate">{m.categoryName}</span>
-                          </div>
-
-                          {/* Phase */}
-                          {m.phase && m.phase !== "regular" && (
-                            <span className="text-xs text-muted-foreground italic shrink-0">{PHASE_LABEL[m.phase] ?? m.phase}</span>
-                          )}
-
-                          {/* Teams */}
-                          <div className={`flex items-center gap-2 flex-1 min-w-0 ${isForfeit ? "opacity-50" : ""}`}>
-                            <span className="text-sm font-semibold truncate">{m.homeTeamName ?? "—"}</span>
-                            <span className="text-xs text-muted-foreground px-1.5 py-0.5 bg-muted rounded font-bold shrink-0">vs</span>
-                            <span className="text-sm font-semibold truncate">{m.awayTeamName ?? "—"}</span>
-                          </div>
-
-                          {/* Badges */}
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {m.isLocked && <Lock className="h-3 w-3 text-amber-500" />}
-                            {hasPending && (
-                              <Badge variant="warning" className="text-xs py-0">Editado</Badge>
-                            )}
-                            {isForfeit && (
-                              <Badge variant="error" className="text-xs py-0">Forfeit</Badge>
-                            )}
-                            {isSwapSource && (
-                              <Badge variant="info" className="text-xs py-0">
-                                <ArrowLeftRight className="h-2.5 w-2.5 mr-1" />Swap
-                              </Badge>
-                            )}
-                          </div>
-
-                          {/* Actions */}
-                          {m.isLocked ? (
-                            <span className="text-xs text-muted-foreground shrink-0">Bloqueado</span>
-                          ) : (
-                            <div className="flex items-center gap-1 shrink-0">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => openEditDialog(m)}
-                                title="Editar fecha, hora y cancha"
-                              >
-                                <Edit2 className="h-3 w-3" />
-                              </Button>
-                              <Button
-                                variant={isSwapSource ? "default" : isSwapTarget ? "outline" : "ghost"}
-                                size="sm"
-                                className={`h-7 px-2 text-xs ${isSwapTarget ? "border-blue-300 text-blue-600" : ""}`}
-                                onClick={() => handleSwap(m.id)}
-                                title={isSwapSource ? "Cancelar swap" : isSwapTarget ? "Intercambiar con este partido" : "Intercambiar slots"}
-                              >
-                                <ArrowLeftRight className="h-3 w-3" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-7 px-2 text-xs ${isForfeit ? "text-red-600" : ""}`}
-                                onClick={() => handleForfeit(m)}
-                                title={isForfeit ? "Quitar forfeit" : "Marcar como forfeit"}
-                              >
-                                <Zap className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </CardContent>
-                </Card>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Edit dialog */}
-      <Dialog open={editingMatchId !== null} onOpenChange={(open) => { if (!open) setEditingMatchId(null); }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Editar partido</DialogTitle>
-            {editingMatch && (
-              <p className="text-sm text-muted-foreground pt-1">
-                {editingMatch.homeTeamName} vs {editingMatch.awayTeamName}
-              </p>
-            )}
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-date">Fecha</Label>
-              <Input
-                id="edit-date"
-                type="date"
-                value={editForm.date}
-                onChange={(e) => setEditForm((f) => ({ ...f, date: e.target.value }))}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-start">Hora inicio</Label>
-                <Input
-                  id="edit-start"
-                  type="time"
-                  value={editForm.startTime}
-                  onChange={(e) => setEditForm((f) => ({ ...f, startTime: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-end">Hora fin</Label>
-                <Input
-                  id="edit-end"
-                  type="time"
-                  value={editForm.endTime}
-                  onChange={(e) => setEditForm((f) => ({ ...f, endTime: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-court">Cancha</Label>
-              <select
-                id="edit-court"
-                value={editForm.courtId}
-                onChange={(e) => setEditForm((f) => ({ ...f, courtId: e.target.value }))}
-                className="w-full text-sm border border-border rounded-md px-2 py-2 bg-background"
-              >
-                <option value="">-- Sin cancha --</option>
-                {courts.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
+        {/* ── Inspector panel ── */}
+        <aside style={{
+          width: 300, flexShrink: 0,
+          borderLeft: "1px solid #e6eaf0", background: "#fff",
+          overflow: "auto", padding: "20px 18px",
+          display: "flex", flexDirection: "column", gap: 14,
+        }}>
+          <div style={{ fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.9, color: "#94a3b8" }}>
+            Partido seleccionado
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingMatchId(null)}>Cancelar</Button>
-            <Button onClick={applyEdit}>Aplicar</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
-      {/* Commit dialog */}
+          {selectedMatch ? (() => {
+            const s = catStyle(selectedMatch.categoryColorHex);
+            const isForfeit = (pendingEdits.get(selectedMatch.id)?.status ?? selectedMatch.status) === "forfeit";
+            return (
+              <>
+                {/* Category badge */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    padding: "3px 10px", borderRadius: 99,
+                    background: s.bg, border: `1px solid ${s.border}`, color: s.text,
+                    fontSize: 12, fontWeight: 700,
+                  }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 99, background: s.dot }} />
+                    {selectedMatch.categoryName ?? "Categoría"}
+                  </span>
+                  {selectedMatch.isLocked && (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#94a3b8", fontWeight: 700 }}>
+                      <Lock size={11} /> Bloqueado
+                    </span>
+                  )}
+                </div>
+
+                {/* Teams */}
+                <div style={{ background: "#f8fafc", border: "1px solid #e6eaf0", borderRadius: 12, padding: 14 }}>
+                  <div style={{ fontWeight: 800, fontSize: 15.5, lineHeight: 1.3 }}>{selectedMatch.homeTeamName ?? "—"}</div>
+                  <div style={{ fontSize: 12, color: "#94a3b8", margin: "4px 0 8px", fontWeight: 600 }}>vs</div>
+                  <div style={{ fontWeight: 800, fontSize: 15.5, lineHeight: 1.3 }}>{selectedMatch.awayTeamName ?? "—"}</div>
+                </div>
+
+                {selectedMatch.isLocked ? (
+                  <div style={{ display: "flex", gap: 10, padding: 12, borderRadius: 11, background: "#f8fafc", border: "1px solid #e6eaf0" }}>
+                    <Lock size={16} color="#94a3b8" style={{ flexShrink: 0, marginTop: 2 }} />
+                    <p style={{ margin: 0, fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+                      Partido bloqueado. No puede ser reprogramado automáticamente.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Court select */}
+                    <div>
+                      <div style={{ fontSize: 11.5, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>Cancha</div>
+                      <div style={{ position: "relative" }}>
+                        <MapPin size={13} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#94a3b8", pointerEvents: "none" }} />
+                        <select
+                          value={selectedMatch.courtId ?? ""}
+                          onChange={(e) => onCourtChange(e.target.value)}
+                          style={{
+                            width: "100%", appearance: "none", WebkitAppearance: "none",
+                            padding: "10px 28px 10px 32px", borderRadius: 10,
+                            border: "1px solid #d4dae3", background: "#fff",
+                            color: "#131c2e", fontWeight: 700, fontSize: 13,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <option value="">Sin cancha</option>
+                          {courts.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#64748b", fontSize: 11 }}>▾</span>
+                      </div>
+                    </div>
+
+                    {/* Time select */}
+                    <div>
+                      <div style={{ fontSize: 11.5, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>Hora</div>
+                      <div style={{ position: "relative" }}>
+                        <Clock size={13} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#94a3b8", pointerEvents: "none" }} />
+                        <select
+                          value={selectedMatch.startTime?.slice(0, 5) ?? ""}
+                          onChange={(e) => onTimeChange(e.target.value)}
+                          style={{
+                            width: "100%", appearance: "none", WebkitAppearance: "none",
+                            padding: "10px 28px 10px 32px", borderRadius: 10,
+                            border: "1px solid #d4dae3", background: "#fff",
+                            color: "#131c2e", fontWeight: 700, fontSize: 13,
+                            fontFamily: "var(--font-mono)", cursor: "pointer",
+                          }}
+                        >
+                          <option value="">Sin hora</option>
+                          {timeSlotOptions.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#64748b", fontSize: 11 }}>▾</span>
+                      </div>
+                    </div>
+
+                    {/* Conflict warning */}
+                    {conflictIds.has(selectedMatch.id) && (
+                      <div style={{ display: "flex", gap: 9, padding: 11, borderRadius: 11, background: "#fef2f2", border: "1px solid #fecaca" }}>
+                        <AlertTriangle size={15} color="#dc2626" style={{ flexShrink: 0 }} />
+                        <div style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.45 }}>
+                          <strong style={{ color: "#dc2626" }}>Solapamiento.</strong> Otro partido usa {selectedMatch.courtName} a las {selectedMatch.startTime?.slice(0, 5)}.
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ height: 1, background: "#f1f5f9" }} />
+
+                    {/* Swap button */}
+                    <button
+                      onClick={() => handleSwapClick(selectedMatch.id)}
+                      style={{
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        gap: 8, width: "100%", padding: "10px 0", borderRadius: 10,
+                        border: `1px solid ${swapSourceId === selectedMatch.id ? "rgba(99,102,241,.35)" : "#e6eaf0"}`,
+                        background: swapSourceId === selectedMatch.id ? "rgba(99,102,241,.08)" : "#fff",
+                        fontSize: 13, fontWeight: 700,
+                        color: swapSourceId === selectedMatch.id ? "#6366f1" : "#475569",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <ArrowLeftRight size={14} />
+                      {swapSourceId === selectedMatch.id ? "Cancelar intercambio" : "Intercambiar con otro partido"}
+                    </button>
+
+                    {/* Forfeit button */}
+                    <button
+                      onClick={() => handleForfeit(selectedMatch.id)}
+                      style={{
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        gap: 8, width: "100%", padding: "9px 0", borderRadius: 10,
+                        border: `1px solid ${isForfeit ? "#fecaca" : "#e6eaf0"}`,
+                        background: isForfeit ? "#fef2f2" : "#fff",
+                        fontSize: 12.5, fontWeight: 700,
+                        color: isForfeit ? "#dc2626" : "#94a3b8",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <Zap size={13} />
+                      {isForfeit ? "Quitar forfeit" : "Marcar como forfeit"}
+                    </button>
+
+                    {/* Hint */}
+                    <p style={{ margin: 0, fontSize: 11.5, color: "#94a3b8", lineHeight: 1.5, display: "flex", gap: 7, alignItems: "flex-start" }}>
+                      <Zap size={12} style={{ flexShrink: 0, marginTop: 2, color: "#94a3b8" }} />
+                      Los cambios manuales se respetan en la próxima generación. Previsualizá el Dry Run para ver advertencias antes de crear la versión.
+                    </p>
+                  </>
+                )}
+              </>
+            );
+          })() : (
+            <p style={{ color: "#94a3b8", fontSize: 13, margin: 0 }}>Seleccioná un partido en el tablero.</p>
+          )}
+
+          {/* Pending changes list */}
+          {pendingEdits.size > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.8, color: "#94a3b8", marginBottom: 10 }}>
+                Cambios pendientes ({pendingEdits.size})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {Array.from(pendingEdits.entries()).slice(-8).reverse().map(([matchId, edit]) => {
+                  const m = matches.find((x) => x.id === matchId);
+                  if (!m) return null;
+                  const label = edit.changeType === "forfeit" ? "Forfeit"
+                    : edit.changeType === "unforfeit" ? "Restaurado"
+                    : edit.changeType === "swap_part" ? "Intercambiado"
+                    : edit.changeType === "court_change" ? `→ ${edit.courtName ?? "?"}`
+                    : `→ ${edit.startTime?.slice(0, 5) ?? "?"}`;
+                  return (
+                    <div key={matchId} style={{
+                      display: "flex", alignItems: "center", gap: 8, fontSize: 11.5,
+                      color: "#64748b", padding: "7px 10px", borderRadius: 8,
+                      background: "#f8fafc", border: "1px solid #e6eaf0",
+                    }}>
+                      <Edit2 size={11} color="#10b981" style={{ flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {m.homeTeamName?.split(" ")[0]} — {label}
+                      </span>
+                      <button
+                        onClick={() => {
+                          const ne = new Map(pendingEdits);
+                          ne.delete(matchId);
+                          setPendingEdits(ne);
+                        }}
+                        style={{ fontSize: 14, color: "#94a3b8", background: "none", border: "none", cursor: "pointer", flexShrink: 0, lineHeight: 1 }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </aside>
+      </div>
+
+      {/* ── Commit dialog ── */}
       <Dialog open={showCommitDialog} onOpenChange={setShowCommitDialog}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Confirmar cambios</DialogTitle>
             <p className="text-sm text-muted-foreground pt-1">
-              Se creará la versión <strong>V{versionNumber + 1}</strong> con {pendingEdits.size} cambio{pendingEdits.size !== 1 ? "s" : ""} aplicado{pendingEdits.size !== 1 ? "s" : ""}.
+              Se creará <strong>V{versionNumber + 1}</strong> con {pendingEdits.size} cambio{pendingEdits.size !== 1 ? "s" : ""} aplicado{pendingEdits.size !== 1 ? "s" : ""}.
             </p>
           </DialogHeader>
           <div className="space-y-3 pt-2">
             <div className="space-y-1.5">
-              <Label htmlFor="commit-reason">Motivo del cambio (opcional)</Label>
+              <Label htmlFor="commit-reason">Motivo (opcional)</Label>
               <Input
                 id="commit-reason"
-                placeholder="Ej: Cambio por solicitud del club Spartans"
+                placeholder="Ej: Cambio por solicitud del club"
                 value={commitReason}
                 onChange={(e) => setCommitReason(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !submitting) handleCommit(); }}
               />
             </div>
             {submitError && (
-              <p className="text-xs text-red-600 flex items-center gap-1">
+              <p className="text-xs text-red-600 flex items-center gap-1.5">
                 <AlertTriangle className="h-3 w-3" /> {submitError}
               </p>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCommitDialog(false)} disabled={submitting}>
+            <button
+              onClick={() => setShowCommitDialog(false)}
+              disabled={submitting}
+              className="text-sm border border-border rounded-md px-4 py-2 bg-background hover:bg-muted transition-colors"
+            >
               Cancelar
-            </Button>
-            <Button onClick={handleCommit} disabled={submitting}>
-              {submitting ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Guardando…</>
-              ) : (
-                <><CheckCircle2 className="h-4 w-4" /> Confirmar y crear V{versionNumber + 1}</>
-              )}
-            </Button>
+            </button>
+            <button
+              onClick={handleCommit}
+              disabled={submitting}
+              className="text-sm rounded-md px-4 py-2 bg-foreground text-background font-semibold flex items-center gap-2"
+            >
+              {submitting
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Guardando…</>
+                : <><CheckCircle2 className="h-3.5 w-3.5" /> Confirmar V{versionNumber + 1}</>}
+            </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Sticky commit bar */}
-      {pendingEdits.size > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur-sm px-6 py-3 flex items-center justify-between gap-4 shadow-lg">
-          <div className="flex items-center gap-2 text-sm">
-            <Edit2 className="h-4 w-4 text-brand-600" />
-            <span className="font-semibold">{pendingEdits.size} cambio{pendingEdits.size !== 1 ? "s" : ""} pendiente{pendingEdits.size !== 1 ? "s" : ""}</span>
-            <span className="text-muted-foreground hidden sm:inline">· No guardado aún</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => { setPendingEdits(new Map()); setSwapSourceId(null); }}
-            >
-              Descartar
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => { setSubmitError(""); setShowCommitDialog(true); }}
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              Confirmar cambios
-            </Button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

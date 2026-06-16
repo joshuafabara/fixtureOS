@@ -435,6 +435,7 @@ export function CategoryContextEditor({
   allCategories,
   inheritedRules,
   initialPrompt,
+  initialConstraints,
   versionNumber,
   teams,
 }: {
@@ -442,16 +443,36 @@ export function CategoryContextEditor({
   allCategories: CategoryRow[];
   inheritedRules: InheritedRule[];
   initialPrompt: string;
+  initialConstraints: ParsedConstraints | null;
   versionNumber: number;
   teams: TeamRow[];
 }) {
   const router = useRouter();
   const [prompt, setPrompt] = useState(initialPrompt);
-  const [preview, setPreview] = useState<ParsedConstraints | null>(null);
+  // preview = the currently displayed interpretation (may be saved or fresh)
+  const [preview, setPreview] = useState<ParsedConstraints | null>(initialConstraints);
+  // true only when preview came from a new parse in this session (not just the saved version)
+  const [isNewParse, setIsNewParse] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+
+  const promptChanged = prompt.trim() !== (initialPrompt ?? "").trim();
+  // Can confirm only when: there's a preview AND the prompt changed AND it was freshly parsed
+  const canConfirm = !!preview && promptChanged && isNewParse;
+
+  const confirmHint = saved
+    ? null
+    : saving
+    ? null
+    : !preview
+    ? "Interpreta el contexto primero"
+    : !promptChanged
+    ? "Sin cambios respecto a la versión guardada"
+    : !isNewParse
+    ? "Interpreta el contexto antes de confirmar los cambios"
+    : null;
 
   async function handleParse() {
     if (!prompt.trim()) return;
@@ -466,6 +487,7 @@ export function CategoryContextEditor({
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setPreview(data.parsed);
+      setIsNewParse(true);
     } catch {
       setError("Error al interpretar el contexto. Intenta de nuevo.");
     } finally {
@@ -568,7 +590,7 @@ export function CategoryContextEditor({
 
               <Textarea
                 value={prompt}
-                onChange={(e) => { setPrompt(e.target.value); setPreview(null); }}
+                onChange={(e) => { setPrompt(e.target.value); setIsNewParse(false); }}
                 placeholder="Ej: U17 empieza el 15 de junio. 2 grupos, round robin simple, top 2 a semifinales…"
                 className="min-h-[120px] resize-none"
               />
@@ -579,7 +601,7 @@ export function CategoryContextEditor({
                   {EXAMPLE_PROMPTS.map((ex) => (
                     <button
                       key={ex}
-                      onClick={() => { setPrompt((t) => t ? `${t} ${ex}` : ex); setPreview(null); }}
+                      onClick={() => { setPrompt((t) => t ? `${t} ${ex}` : ex); setIsNewParse(false); }}
                       className="text-left text-xs px-2.5 py-1.5 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors flex items-center gap-1"
                     >
                       <span className="text-brand-500 font-bold">+</span> {ex}
@@ -595,7 +617,7 @@ export function CategoryContextEditor({
                   <Zap className="h-4 w-4" />
                   {parsing ? "Interpretando..." : "Interpretar contexto de categoría"}
                 </Button>
-                <Button variant="ghost" size="icon" onClick={() => { setPrompt(""); setPreview(null); }}>
+                <Button variant="ghost" size="icon" onClick={() => { setPrompt(""); setPreview(null); setIsNewParse(false); }}>
                   <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
@@ -610,7 +632,13 @@ export function CategoryContextEditor({
                     <Layers className="h-4 w-4 text-brand-600" />
                     Modo de juego interpretado
                   </CardTitle>
-                  <Badge variant="info">Interpretado</Badge>
+                  {isNewParse ? (
+                    <Badge variant="info">Interpretado</Badge>
+                  ) : promptChanged ? (
+                    <Badge variant="outline" className="text-amber-600 border-amber-300">Modificado</Badge>
+                  ) : (
+                    <Badge variant="secondary">Guardado</Badge>
+                  )}
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -644,7 +672,7 @@ export function CategoryContextEditor({
 
       {/* Action bar */}
       <div className="flex items-center gap-2 pt-2 flex-wrap">
-        <Button variant="ghost" size="sm" onClick={() => { setPrompt(initialPrompt); setPreview(null); }}>
+        <Button variant="ghost" size="sm" onClick={() => { setPrompt(initialPrompt); setPreview(initialConstraints ?? null); setIsNewParse(false); }}>
           <X className="h-4 w-4" /> Descartar cambios
         </Button>
         <div className="flex-1" />
@@ -654,15 +682,20 @@ export function CategoryContextEditor({
         <Button variant="outline" size="sm" asChild>
           <a href="/context/impact-simulator"><Target className="h-4 w-4" /> Simular impacto</a>
         </Button>
-        <Button onClick={handleConfirm} disabled={!preview || saving || saved}>
-          {saved ? (
-            <><Check className="h-4 w-4" /> Guardado</>
-          ) : saving ? (
-            "Guardando..."
-          ) : (
-            <><Save className="h-4 w-4" /> Confirmar modo de juego</>
+        <div className="flex flex-col items-end gap-1">
+          <Button onClick={handleConfirm} disabled={!canConfirm || saving || saved} title={confirmHint ?? undefined}>
+            {saved ? (
+              <><Check className="h-4 w-4" /> Guardado</>
+            ) : saving ? (
+              "Guardando..."
+            ) : (
+              <><Save className="h-4 w-4" /> Confirmar modo de juego</>
+            )}
+          </Button>
+          {confirmHint && !saving && !saved && (
+            <p className="text-xs text-muted-foreground">{confirmHint}</p>
           )}
-        </Button>
+        </div>
       </div>
     </div>
   );

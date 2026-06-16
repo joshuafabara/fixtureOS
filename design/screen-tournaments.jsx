@@ -3,6 +3,7 @@
    Selecting one reveals its summary + entry points. */
 
 function TournamentDropdown({ value, onChange }) {
+  const { nav } = useNav();
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
   React.useEffect(() => {
@@ -55,7 +56,7 @@ function TournamentDropdown({ value, onChange }) {
             );
           })}
           <div style={{ height: 1, background: "var(--line)", margin: "6px 4px" }} />
-          <button onClick={() => setOpen(false)} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px dashed var(--line-strong)", background: "transparent", color: "var(--accent)", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "var(--font-sans)" }}>
+          <button onClick={() => { setOpen(false); nav("newtournament"); }} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px dashed var(--line-strong)", background: "transparent", color: "var(--accent)", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "var(--font-sans)" }}>
             <Icon name="plus" size={16} /> Crear nuevo torneo
           </button>
         </div>
@@ -85,7 +86,7 @@ function TournamentsScreen() {
         sub={`${TOURNAMENTS.length} torneos en Quito Basket Liga · elige uno para gestionarlo`}
         right={<>
           <Btn variant="ghost" icon="upload" onClick={() => nav("import")}>Importar</Btn>
-          <Btn variant="primary" icon="plus">Nuevo torneo</Btn>
+          <Btn variant="primary" icon="plus" onClick={() => nav("newtournament")}>Nuevo torneo</Btn>
         </>}
       />
 

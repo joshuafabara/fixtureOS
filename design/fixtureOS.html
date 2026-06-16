@@ -28,6 +28,7 @@
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="ui.jsx"></script>
 <script type="text/babel" src="shell.jsx"></script>
+<script type="text/babel" src="import-shared.jsx"></script>
 <script type="text/babel" src="screen-dashboard.jsx"></script>
 <script type="text/babel" src="screen-tournaments.jsx"></script>
 <script type="text/babel" src="screen-tournament.jsx"></script>
@@ -38,6 +39,13 @@
 <script type="text/babel" src="screen-clubdetail.jsx"></script>
 <script type="text/babel" src="screen-manualedit.jsx"></script>
 <script type="text/babel" src="screen-import.jsx"></script>
+<script type="text/babel" src="screen-newtournament.jsx"></script>
+<script type="text/babel" src="screen-edittournament.jsx"></script>
+<script type="text/babel" src="screen-import-mapping.jsx"></script>
+<script type="text/babel" src="screen-import-diff.jsx"></script>
+<script type="text/babel" src="screen-import-errors.jsx"></script>
+<script type="text/babel" src="screen-import-setup.jsx"></script>
+<script type="text/babel" src="screen-import-history.jsx"></script>
 <script type="text/babel" src="context-shared.jsx"></script>
 <script type="text/babel" src="screen-context-dashboard.jsx"></script>
 <script type="text/babel" src="screen-context-org.jsx"></script>
@@ -99,6 +107,13 @@
       clubdetail:  () => window.ClubDetailScreen ? <ClubDetailScreen /> : <ScreenStub title="Detalle de club" icon="building" />,
       manualedit:  () => window.ManualEditScreen ? <ManualEditScreen /> : <ScreenStub title="Edición manual" icon="edit" />,
       import:      () => window.ImportScreen ? <ImportScreen /> : <ScreenStub title="Importar datos" icon="upload" />,
+      newtournament:  () => window.NewTournamentScreen ? <NewTournamentScreen /> : <ScreenStub title="Crear Torneo" icon="trophy" />,
+      edittournament: () => window.EditTournamentScreen ? <EditTournamentScreen /> : <ScreenStub title="Editar Torneo" icon="trophy" />,
+      mapping:        () => window.ImportMappingScreen ? <ImportMappingScreen /> : <ScreenStub title="Revisar Mapeo" icon="list" />,
+      importdiff:     () => window.ImportDiffScreen ? <ImportDiffScreen /> : <ScreenStub title="Revisión de Cambios" icon="gitcompare" />,
+      importerrors:   () => window.ImportErrorsScreen ? <ImportErrorsScreen /> : <ScreenStub title="Resolver Problemas" icon="alert" />,
+      setup:          () => window.PostImportSetupScreen ? <PostImportSetupScreen /> : <ScreenStub title="Setup Post-Importación" icon="layers" />,
+      imports:        () => window.ImportHistoryScreen ? <ImportHistoryScreen /> : <ScreenStub title="Historial de Importaciones" icon="history" />,
       context:     () => window.ContextScreen ? <ContextScreen /> : <ScreenStub title="Contexto" icon="message" />,
       context:     () => window.ContextDashboardScreen ? <ContextDashboardScreen /> : <ScreenStub title="Contexto" icon="sliders" />,
       ctxorg:        () => window.OrgContextScreen ? <OrgContextScreen /> : <ScreenStub title="Contexto de Organización" icon="building" />,

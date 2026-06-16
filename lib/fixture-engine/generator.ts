@@ -225,6 +225,19 @@ export async function generateFixtureDryRun(
       tournamentMinDays ??
       orgMinDays;
 
+    // Effective play days: category > tournament > org
+    const catPlayDayNames =
+      (catConstraints?.playDays as string[] | undefined) ??
+      (tournamentConstraints.playDays as string[] | undefined) ??
+      playDayNames;
+    const catAllowedDays = catPlayDayNames.map(dayNameToNumber).filter((d) => d >= 0);
+
+    // Effective time window: category > tournament > org
+    const catTimeWindow =
+      (catConstraints?.timeWindow as { start: string; end: string } | undefined) ??
+      (tournamentConstraints.timeWindow as { start: string; end: string } | undefined) ??
+      (orgConstraints.timeWindow as { start: string; end: string } | undefined);
+
     // Merge timeRestrictions from all three levels (additive — all apply)
     const catTimeRestrictions = (catConstraints?.timeRestrictions as TimeRestriction[] | undefined) ?? [];
     const allTimeRestrictions = [...orgTimeRestrictions, ...tournamentTimeRestrictions, ...catTimeRestrictions];
@@ -263,6 +276,8 @@ export async function generateFixtureDryRun(
       matchDurationMinutes: catDuration,
       teamTimeConstraints: teamTimeConstraints.length > 0 ? teamTimeConstraints : undefined,
       minDaysBetweenMatches,
+      allowedDays: catAllowedDays.length > 0 ? catAllowedDays : undefined,
+      timeWindow: catTimeWindow,
     });
   }
 

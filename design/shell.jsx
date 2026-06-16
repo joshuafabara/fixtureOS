@@ -15,6 +15,7 @@ const NAV_ITEMS = [
 const SCREEN_SECTION = {
   dashboard: "dashboard",
   tournaments: "tournaments", tournament: "tournaments", import: "tournaments", builder: "tournaments",
+  newtournament: "tournaments", edittournament: "tournaments", mapping: "tournaments", importdiff: "tournaments", importerrors: "tournaments", setup: "tournaments", imports: "tournaments",
   fixture: "fixture", dryrun: "fixture", compare: "fixture", manualedit: "fixture", history: "fixture", standings: "fixture", standingsreview: "fixture",
   context: "context", ctxorg: "context", ctxtournament: "context", ctxcategory: "context", ctxdate: "context", ctxhistory: "context", ctxcompare: "context", ctximpact: "context",
   clubs: "clubs", clubdetail: "clubs", comms: "comms",

@@ -12,6 +12,7 @@ type ParsedPreview = {
   timeWindow?: { start: string; end: string };
   defaultMatchDurationMinutes?: number;
   clubGrouping?: { enabled: boolean; type: string };
+  noGaps?: boolean;
   warnings?: string[];
   [key: string]: unknown;
 };
@@ -177,6 +178,9 @@ export function OrgContextEditor({
                   ? `Activada (${preview.clubGrouping.type === "soft" ? "preferencial" : "estricta"})`
                   : "Desactivada"}
               />
+            )}
+            {preview.noGaps && (
+              <PreviewRow label="Programación sin huecos" value="Activada — partidos consecutivos sin espacios vacíos" />
             )}
 
             {preview.warnings && preview.warnings.length > 0 && (

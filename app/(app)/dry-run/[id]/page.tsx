@@ -10,9 +10,10 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, X, RefreshCw, ChevronLeft } from "lucide-react";
+import { AlertTriangle, X, ChevronLeft } from "lucide-react";
 import { DryRunActions } from "@/components/dry-run/dry-run-actions";
 import { DryRunChangesViewer, type DryRunMatchRow } from "@/components/dry-run/dry-run-changes-viewer";
+import { RegenerateButton } from "@/components/dry-run/regenerate-button";
 
 type MatchData = {
   categoryId?: string;
@@ -139,11 +140,7 @@ export default async function DryRunDetailPage({
             </p>
           </div>
           {dryRun.status === "ready" && (
-            <Button variant="outline" size="sm" asChild>
-              <Link href={`/dry-run/generate?tournamentId=${dryRun.tournamentId}`}>
-                <RefreshCw className="h-4 w-4" /> Regenerar
-              </Link>
-            </Button>
+            <RegenerateButton tournamentId={dryRun.tournamentId} />
           )}
         </div>
       </div>

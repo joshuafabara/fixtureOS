@@ -175,6 +175,7 @@ export default async function CategoryContextPage({
         allCategories={allCategories}
         inheritedRules={inheritedRules}
         initialPrompt={latestVersion?.rawPrompt ?? ""}
+        initialConstraints={(latestVersion?.parsedConstraints ?? null) as import("@/lib/context/mock-parser").ParsedConstraints | null}
         versionNumber={latestVersion?.versionNumber ?? 0}
         teams={categoryTeams.map((t) => ({ id: t.id, name: t.name, clubName: t.clubName ?? undefined }))}
       />

@@ -7,6 +7,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: "list",
+  timeout: 30_000,
   use: {
     baseURL: "http://localhost:3000",
     trace: "on-first-retry",
@@ -18,11 +19,11 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  // Uncomment to auto-start the dev server for tests:
-  // webServer: {
-  //   command: "npm run dev",
-  //   url: "http://localhost:3000",
-  //   reuseExistingServer: !process.env.CI,
-  //   timeout: 120_000,
-  // },
+  // Auto-start dev server when running E2E tests
+  webServer: {
+    command: "nvm use && npm run dev",
+    url: "http://localhost:3000",
+    reuseExistingServer: true,
+    timeout: 120_000,
+  },
 });

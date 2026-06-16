@@ -175,6 +175,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Category-level parsed constraints (for per-category rule checking)
+  const categoryParsedConstraints: Record<string, Record<string, unknown>> = {};
+  for (const [catId, cv] of latestCategoryContextByScopeId.entries()) {
+    if (cv.parsedConstraints) {
+      categoryParsedConstraints[catId] = cv.parsedConstraints as Record<string, unknown>;
+    }
+  }
+
   const input: AuditInput = {
     organizationContextPrompt: orgContexts[0]?.rawPrompt ?? "",
     tournamentContextPrompt: tournamentContexts[0]?.rawPrompt ?? "",
@@ -188,6 +196,7 @@ export async function POST(req: NextRequest) {
       prompt: cv.rawPrompt,
     })),
     parsedConstraints: mergedConstraints,
+    categoryParsedConstraints,
     constraintHierarchy: [
       "locked_match",
       "manual_override",

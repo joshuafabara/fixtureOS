@@ -6,19 +6,7 @@ import {
 } from "@/lib/db/schema";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { notFound } from "next/navigation";
-import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { ChevronLeft, History } from "lucide-react";
 import { MatchEditor } from "@/components/fixture/match-editor";
-import { EditVersionSwitcher } from "@/components/fixture/version-switcher";
-
-const STATE_LABEL: Record<string, string> = {
-  draft: "Borrador", published: "Publicado", archived: "Archivado",
-};
-const STATE_BADGE: Record<string, "draft" | "published" | "archived"> = {
-  draft: "draft", published: "published", archived: "archived",
-};
 
 export default async function ManualEditPage({
   params,
@@ -38,7 +26,6 @@ export default async function ManualEditPage({
 
   if (!tournament) notFound();
 
-  // Resolve version (latest by default)
   const allVersions = await db
     .select({
       id: fixtureVersions.id,
@@ -61,7 +48,6 @@ export default async function ManualEditPage({
     ? (allVersions.find((v) => v.versionNumber === requestedV) ?? allVersions[0])
     : allVersions[0];
 
-  // Load matches with joined data
   const allTeams = await db
     .select({ id: teams.id, name: teams.name })
     .from(teams)
@@ -110,7 +96,6 @@ export default async function ManualEditPage({
     phase: m.phase,
   }));
 
-  // Load active courts
   const courtList = await db
     .select({ id: courts.id, name: courts.name })
     .from(courts)
@@ -118,74 +103,14 @@ export default async function ManualEditPage({
     .orderBy(asc(courts.name));
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto pb-24">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Link href="/fixture" className="hover:text-foreground flex items-center gap-1">
-          <ChevronLeft className="h-3.5 w-3.5" /> Fixtures
-        </Link>
-        <span>/</span>
-        <Link href={`/fixture/${tournamentId}`} className="hover:text-foreground">
-          {tournament.name}
-        </Link>
-        <span>/</span>
-        <span className="text-foreground font-medium">Edición manual</span>
-      </div>
-
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-2xl font-bold">Edición manual</h1>
-            <Badge variant={STATE_BADGE[version.state] ?? "draft"}>
-              V{version.versionNumber} · {STATE_LABEL[version.state] ?? version.state}
-            </Badge>
-          </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            {tournament.name} · {matchData.length} partido{matchData.length !== 1 ? "s" : ""}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Version switcher */}
-          {allVersions.length > 1 && (
-            <EditVersionSwitcher
-              tournamentId={tournamentId}
-              currentVersion={version.versionNumber}
-              versions={allVersions.map((v) => ({
-                versionNumber: v.versionNumber,
-                label: `V${v.versionNumber} · ${STATE_LABEL[v.state] ?? v.state}`,
-              }))}
-            />
-          )}
-          <Button variant="outline" size="sm" asChild>
-            <Link href={`/fixture/${tournamentId}/history`}>
-              <History className="h-4 w-4" /> Historial
-            </Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link href={`/fixture/${tournamentId}?v=${version.versionNumber}`}>
-              Ver fixture
-            </Link>
-          </Button>
-        </div>
-      </div>
-
-      {/* Instruction callout */}
-      <div className="rounded-xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground space-y-1">
-        <p className="font-medium text-foreground">Cómo funciona la edición manual</p>
-        <p>• <strong>✏️ Editar</strong> — cambia fecha, hora o cancha de un partido.</p>
-        <p>• <strong>⇄ Swap</strong> — selecciona dos partidos para intercambiar sus slots completos (fecha + hora + cancha).</p>
-        <p>• <strong>⚡ Forfeit</strong> — marca un partido como forfeit o restáuralo a programado.</p>
-        <p>Los cambios son locales hasta que presiones <strong>"Confirmar cambios"</strong>. Al confirmar se crea una nueva versión inmutable (V{version.versionNumber + 1}).</p>
-      </div>
-
-      <MatchEditor
-        versionId={version.id}
-        tournamentId={tournamentId}
-        versionNumber={version.versionNumber}
-        matches={matchData}
-        courts={courtList}
-      />
-    </div>
+    <MatchEditor
+      versionId={version.id}
+      tournamentId={tournamentId}
+      tournamentName={tournament.name}
+      versionNumber={version.versionNumber}
+      versionState={version.state}
+      matches={matchData}
+      courts={courtList}
+    />
   );
 }

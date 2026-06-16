@@ -101,6 +101,7 @@ export type AuditInput = {
   categoryContextPrompts: Array<{ categoryId: string; categoryName: string; prompt: string }>;
   dateContextPrompts: Array<{ date: string; prompt: string }>;
   parsedConstraints: Record<string, unknown>;
+  categoryParsedConstraints?: Record<string, Record<string, unknown>>; // categoryId → parsed constraints
   constraintHierarchy: string[];
   proposedMatches: ProposedMatch[];
   teamNames: Record<string, string>; // teamId → teamName
@@ -120,52 +121,127 @@ function getClient(): OpenAI | null {
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `Eres FixtureOS AI Auditor. Tu función es AUDITAR — nunca modificar directamente fixtures.
+const SYSTEM_PROMPT = `Eres FixtureOS AI Auditor. Tu función es AUDITAR — verificar restricciones con precisión, nunca modificar fixtures directamente.
 
-Recibirás:
-1. Prompts de contexto (organización, torneo, categoría, fecha) con las reglas definidas
-2. Las restricciones parseadas en formato estructurado
-3. Los partidos propuestos por el motor determinista
-4. Partidos bloqueados (locked) y overrides manuales activos
+Recibirás un JSON con:
+- organization_context, tournament_context: prompts de contexto en texto libre
+- category_contexts: [{categoryId, categoryName, prompt}] — reglas específicas por categoría
+- category_parsed_constraints: {categoryId: {playDays, timeWindow, timeRestrictions, ...}} — restricciones parseadas por categoría
+- parsed_constraints: restricciones parseadas (org + torneo fusionados)
+- proposed_matches: [{id, categoryId, homeTeamName, awayTeamName, scheduledDate, startTime, endTime, courtName, phase}]
+- team_names: {teamId: teamName}
 
 JERARQUÍA DE RESTRICCIONES (mayor → menor prioridad):
 1. Locked matches — NUNCA deben cambiar
 2. Manual overrides — respetar siempre
-3. Restricciones de Fecha
-4. Restricciones de Categoría
-5. Restricciones de Torneo
-6. Restricciones de Organización
-7. Restricciones del Sistema
+3. Restricciones de Categoría (category_parsed_constraints, category_contexts)
+4. Restricciones de Torneo
+5. Restricciones de Organización
 
-REGLAS DE CLASIFICACIÓN:
-- "fail": partido bloqueado modificado, conflicto de cancha/equipo, restricción de horario violada (severity="error")
-- "warning": preferencias soft no satisfechas, contextos ambiguos, reglas blandas no aplicadas
-- "pass": todas las restricciones críticas respetadas
+═══════════════════════════════════════════════
+VERIFICACIONES OBLIGATORIAS — revisa CADA UNA:
+═══════════════════════════════════════════════
 
-RESTRICCIONES QUE DEBES VERIFICAR:
-- timeRestrictions: afterTime y beforeTime por equipo
-- minDaysBetweenMatches: días mínimos entre partidos del mismo equipo
-- blackoutDates: fechas prohibidas
-- timeWindow: horario global del torneo
-- matchDurationByPhase: duración correcta por fase
-- courts: partidos solo en canchas permitidas
-- locked matches: sin cambios de cancha/fecha/hora
-- manual overrides: respetados en la propuesta
-- clubGrouping: agrupación de clubes (soft=warning, hard=error)
-- gameMode/bracketRounds: formato y llaves del torneo
+1. DÍAS DE JUEGO POR CATEGORÍA
+   - Para cada categoría en category_parsed_constraints, leer playDays (ej: ["friday","saturday"])
+   - Para cada partido de esa categoría, calcular el día de la semana de scheduledDate
+     (Lunes=monday, Martes=tuesday, Miércoles=wednesday, Jueves=thursday, Viernes=friday, Sábado=saturday, Domingo=sunday)
+   - Si el día NO está en playDays → violation severity:"error"
+   - Si no hay category_parsed_constraints para una categoría, usar parsed_constraints.playDays de org/torneo
+   - También leer los prompts de category_contexts en texto libre para detectar restricciones de día no parseadas
 
-FORMATO DE RESPUESTA (JSON puro, sin markdown):
+2. VENTANA HORARIA POR CATEGORÍA
+   - Para cada categoría en category_parsed_constraints con timeWindow definido:
+     → startTime de cada partido debe ser >= timeWindow.start
+     → startTime + duración del partido debe ser <= timeWindow.end
+   - Si hay timeWindow global en parsed_constraints, aplicar a todos los partidos
+   - Verificar también diferencias de ventana por día si el prompt lo especifica
+
+3. RESTRICCIONES DE EQUIPO (timeRestrictions)
+   - Para cada entrada en parsed_constraints.timeRestrictions o category_parsed_constraints[*].timeRestrictions:
+     → buscar partidos donde homeTeamName o awayTeamName contiene el target (case-insensitive)
+     → si afterTime: verificar startTime >= afterTime
+     → si beforeTime: verificar startTime < beforeTime
+   - Violación severity:"error" por cada partido que no cumpla
+
+4. FRECUENCIA MÍNIMA (minDaysBetweenMatches)
+   - Si minDaysBetweenMatches está definido (org o categoría), calcular días entre partidos del mismo equipo
+   - Si dos partidos de un mismo equipo tienen menos días entre ellos → violation severity:"error"
+
+5. PARTIDOS BLOQUEADOS
+   - Verificar que ningún locked match cambió de cancha, fecha u hora en proposed_matches
+
+6. DURACIÓN POR FASE (matchDurationByPhase)
+   - Si matchDurationByPhase está definido, verificar que endTime - startTime corresponde a la fase del partido
+
+═══════════════════════════════════════════════
+ESTRUCTURA EXACTA DE LA RESPUESTA:
+═══════════════════════════════════════════════
+
+Responde SOLO con JSON puro (sin markdown, sin texto adicional):
+
 {
   "status": "pass" | "warning" | "fail",
-  "confidence": número entre 0 y 1,
-  "summary_es": "resumen en español",
-  "violations": [...],
-  "missing_interpretations": [...],
-  "approved_constraints": [...],
-  "requires_user_confirmation": boolean
+  "confidence": 0.0 a 1.0,
+  "summary_es": "Resumen específico mencionando categorías y equipos afectados",
+  "violations": [
+    {
+      "severity": "error" | "warning" | "info",
+      "type": "constraint_conflict" | "context_missed" | "bad_game_mode" | "court_conflict" | "team_conflict" | "locked_match_changed" | "manual_override_ignored" | "schedule_preference_unmet" | "ambiguous_context",
+      "context_source": "category" | "organization" | "tournament" | "date" | "locked_match" | "manual_override" | "system",
+      "human_prompt_excerpt": "cita LITERAL y breve de la regla en el contexto (ej: 'Jugar solo viernes entre 6pm y 9pm y sábados entre 8am y 6pm')",
+      "affected_match_ids": ["id1", "id2"],
+      "affected_category_ids": ["catId"],
+      "explanation_es": "REQUERIDO — NO puede estar vacío. Describe concretamente: qué partido, qué equipo, qué día/hora fue programado, qué dice la restricción, cuál es la diferencia. Ej: 'El partido Spartans U14 vs Hawks U14 (ID: abc) está programado el domingo 2026-07-05, pero U14 Masculino solo puede jugar viernes y sábados según el contexto de categoría.'",
+      "recommended_fix_es": "REQUERIDO — acción concreta. Ej: 'Reprogramar al viernes 2026-07-10 o sábado 2026-07-11.'",
+      "machine_recommendation": {
+        "action": "none" | "move_match" | "swap_match" | "change_court" | "change_time" | "mark_forfeit" | "ask_user" | "regenerate",
+        "patch": null
+      }
+    }
+  ],
+  "missing_interpretations": [
+    {
+      "prompt_excerpt": "fragmento del contexto ambiguo",
+      "issue_es": "descripción del problema de interpretación",
+      "suggested_question_es": "pregunta sugerida al usuario"
+    }
+  ],
+  "approved_constraints": [
+    {
+      "constraint_id": "identificador único",
+      "status": "satisfied" | "partially_satisfied" | "not_applicable",
+      "explanation_es": "descripción de por qué se cumple"
+    }
+  ],
+  "requires_user_confirmation": true | false
 }
 
-Todos los textos explicativos deben estar en español. Sé específico con los IDs de partidos y categorías afectados.`;
+REGLAS CRÍTICAS:
+- explanation_es NUNCA puede ser "" — siempre debe tener texto descriptivo
+- recommended_fix_es NUNCA puede ser "" — siempre debe tener acción concreta
+- Si encuentras múltiples partidos que violan la misma regla, agrúpalos en UNA violación con todos los affected_match_ids y explain todos en explanation_es
+- summary_es debe ser específico: mencionar qué categorías y cuántos partidos tienen problemas`;
+
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
+const DAY_NAMES_ES: Record<number, string> = {
+  0: "domingo", 1: "lunes", 2: "martes", 3: "miércoles",
+  4: "jueves", 5: "viernes", 6: "sábado",
+};
+
+const DAY_NAME_TO_NUM: Record<string, number> = {
+  sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
+  thursday: 4, friday: 5, saturday: 6,
+};
+
+function parseDayNums(days: string[]): number[] {
+  return days.map((d) => DAY_NAME_TO_NUM[d.toLowerCase()] ?? -1).filter((n) => n >= 0);
+}
+
+function matchDow(date: string): number {
+  return new Date(date + "T12:00:00").getDay();
+}
 
 // ─── Mock auditor (deterministic fallback) ────────────────────────────────────
 
@@ -175,6 +251,68 @@ export function mockAuditFixture(input: AuditInput): AuditReport {
   const missing_interpretations: MissingInterpretation[] = [];
 
   const constraints = input.parsedConstraints;
+
+  // Per-category play day check (uses categoryParsedConstraints if available, falls back to org)
+  const catConstraintsMap = input.categoryParsedConstraints ?? {};
+  const orgPlayDays = (constraints.playDays as string[] | undefined) ?? [];
+  const orgAllowedDows = orgPlayDays.length > 0 ? parseDayNums(orgPlayDays) : null;
+
+  for (const [catId, catC] of Object.entries(catConstraintsMap)) {
+    const catPlayDays = (catC.playDays as string[] | undefined) ?? [];
+    if (catPlayDays.length === 0) continue;
+    const allowedDows = parseDayNums(catPlayDays);
+    const badMatches = input.proposedMatches.filter(
+      (m) => m.categoryId === catId && m.scheduledDate && !allowedDows.includes(matchDow(m.scheduledDate))
+    );
+    if (badMatches.length > 0) {
+      const examples = badMatches
+        .slice(0, 3)
+        .map((m) => {
+          const home = m.homeTeamId ? (input.teamNames[m.homeTeamId] ?? m.homeTeamId) : "TBD";
+          const away = m.awayTeamId ? (input.teamNames[m.awayTeamId] ?? m.awayTeamId) : "TBD";
+          const dow = DAY_NAMES_ES[matchDow(m.scheduledDate!)] ?? m.scheduledDate;
+          return `${home} vs ${away} (${dow} ${m.scheduledDate}, ${m.startTime?.slice(0, 5)})`;
+        })
+        .join("; ");
+      const extra = badMatches.length > 3 ? ` y ${badMatches.length - 3} más` : "";
+      violations.push({
+        severity: "error",
+        type: "constraint_conflict",
+        context_source: "category",
+        human_prompt_excerpt: `Jugar solo ${catPlayDays.join(" y ")}`,
+        affected_match_ids: badMatches.map((m) => m.id),
+        affected_category_ids: [catId],
+        explanation_es: `${badMatches.length} partido(s) programado(s) en días no permitidos: ${examples}${extra}. La restricción de categoría indica jugar solo ${catPlayDays.join(" y ")}.`,
+        recommended_fix_es: `Reprogramar todos los partidos afectados a ${catPlayDays.join(" o ")}.`,
+        machine_recommendation: { action: "move_match", patch: null },
+      });
+    }
+  }
+
+  // Also check org-level play days for matches without a category-level override
+  if (orgAllowedDows && orgAllowedDows.length > 0) {
+    const catsWithCatConstraints = new Set(Object.keys(catConstraintsMap).filter(
+      (id) => (catConstraintsMap[id]?.playDays as string[] | undefined)?.length
+    ));
+    const badMatches = input.proposedMatches.filter(
+      (m) => !catsWithCatConstraints.has(m.categoryId) &&
+        m.scheduledDate &&
+        !orgAllowedDows.includes(matchDow(m.scheduledDate))
+    );
+    if (badMatches.length > 0) {
+      violations.push({
+        severity: "error",
+        type: "constraint_conflict",
+        context_source: "organization",
+        human_prompt_excerpt: `Días de juego: ${orgPlayDays.join(", ")}`,
+        affected_match_ids: badMatches.map((m) => m.id),
+        affected_category_ids: [...new Set(badMatches.map((m) => m.categoryId))],
+        explanation_es: `${badMatches.length} partido(s) programados fuera de los días permitidos por la organización (${orgPlayDays.join(", ")}).`,
+        recommended_fix_es: `Reprogramar a ${orgPlayDays.join(" o ")}.`,
+        machine_recommendation: { action: "move_match", patch: null },
+      });
+    }
+  }
 
   // 1. Check locked matches
   const lockedById = new Map(input.lockedMatches.map((m) => [m.id, m]));
@@ -400,16 +538,40 @@ export function mockAuditFixture(input: AuditInput): AuditReport {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeViolation(v: Record<string, any>): AuditViolation {
-  const rec = (v.machine_recommendation ?? v.machineRecommendation ?? {}) as Record<string, unknown>;
+  const rec = (v.machine_recommendation ?? v.machineRecommendation ?? v.recommendation ?? {}) as Record<string, unknown>;
+  // Try every plausible field name GPT might emit for explanation
+  const explanation = String(
+    v.explanation_es ??
+    v.explanationEs ??
+    v.explanation ??
+    v.description ??
+    v.descripcion ??
+    v.mensaje ??
+    v.message ??
+    v.text ??
+    v.detalle ??
+    ""
+  );
+  const fix = String(
+    v.recommended_fix_es ??
+    v.recommendedFixEs ??
+    v.recommended_fix ??
+    v.fix ??
+    v.corrección ??
+    v.correccion ??
+    v.solucion ??
+    v.solution ??
+    ""
+  );
   return {
     severity: (v.severity ?? "info") as AuditViolationSeverity,
     type: (v.type ?? "context_missed") as AuditViolationType,
-    context_source: (v.context_source ?? v.contextSource ?? "organization") as AuditContextSource,
-    human_prompt_excerpt: String(v.human_prompt_excerpt ?? v.humanPromptExcerpt ?? v.prompt_excerpt ?? ""),
-    affected_match_ids: (v.affected_match_ids ?? v.affectedMatchIds ?? []) as string[],
-    affected_category_ids: (v.affected_category_ids ?? v.affectedCategoryIds ?? []) as string[],
-    explanation_es: String(v.explanation_es ?? v.explanationEs ?? v.explanation ?? ""),
-    recommended_fix_es: String(v.recommended_fix_es ?? v.recommendedFixEs ?? v.recommended_fix ?? v.fix ?? ""),
+    context_source: (v.context_source ?? v.contextSource ?? v.source ?? "organization") as AuditContextSource,
+    human_prompt_excerpt: String(v.human_prompt_excerpt ?? v.humanPromptExcerpt ?? v.prompt_excerpt ?? v.excerpt ?? ""),
+    affected_match_ids: (v.affected_match_ids ?? v.affectedMatchIds ?? v.matchIds ?? []) as string[],
+    affected_category_ids: (v.affected_category_ids ?? v.affectedCategoryIds ?? v.categoryIds ?? []) as string[],
+    explanation_es: explanation,
+    recommended_fix_es: fix,
     machine_recommendation: {
       action: (rec.action ?? "none") as MachineAction,
       patch: (rec.patch ?? null) as Record<string, unknown> | null,
@@ -470,6 +632,7 @@ export async function auditFixture(input: AuditInput): Promise<AuditReport> {
     category_contexts: input.categoryContextPrompts,
     date_contexts: input.dateContextPrompts,
     parsed_constraints: input.parsedConstraints,
+    category_parsed_constraints: input.categoryParsedConstraints ?? {},
     constraint_hierarchy: input.constraintHierarchy,
     proposed_matches: input.proposedMatches.map((m) => ({
       ...m,
