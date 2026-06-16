@@ -158,15 +158,18 @@ VERIFICACIONES OBLIGATORIAS — revisa CADA UNA:
    - Verificar también diferencias de ventana por día si el prompt lo especifica
 
 3. RESTRICCIONES DE EQUIPO (timeRestrictions)
-   - Para cada entrada en parsed_constraints.timeRestrictions o category_parsed_constraints[*].timeRestrictions:
-     → buscar partidos donde homeTeamName o awayTeamName contiene el target (case-insensitive)
-     → si afterTime: verificar startTime >= afterTime
-     → si beforeTime: verificar startTime < beforeTime
+   - Para cada entrada en parsed_constraints.timeRestrictions → aplica a TODOS los partidos
+   - Para cada entrada en category_parsed_constraints[catId].timeRestrictions → aplica SOLO a partidos donde categoryId === catId
+   - En ambos casos: buscar partidos donde homeTeamName o awayTeamName contiene el target (case-insensitive)
+   - si afterTime: verificar startTime >= afterTime; si beforeTime: verificar startTime < beforeTime
    - Violación severity:"error" por cada partido que no cumpla
+   - IMPORTANTE: "Crossover" en category_parsed_constraints["U14 Masculino"] solo aplica a partidos U14 Masculino con Crossover. NUNCA a Crossover U17, Crossover U18, etc. (otras categorías)
 
 4. FRECUENCIA MÍNIMA (minDaysBetweenMatches)
-   - Si minDaysBetweenMatches está definido (org o categoría), calcular días entre partidos del mismo equipo
-   - Si dos partidos de un mismo equipo tienen menos días entre ellos → violation severity:"error"
+   - Si minDaysBetweenMatches en parsed_constraints (org/torneo): calcular días entre partidos del mismo equipo en TODAS las categorías
+   - Si minDaysBetweenMatches en category_parsed_constraints[catId]: calcular días entre partidos del mismo equipo SOLO dentro de esa categoría (categoryId === catId)
+   - "1 partido por semana" = minDaysBetweenMatches: 7
+   - Si dos partidos del mismo equipo (dentro del scope correcto) tienen menos días entre ellos → violation severity:"error"
 
 5. PARTIDOS BLOQUEADOS
    - Verificar que ningún locked match cambió de cancha, fecha u hora en proposed_matches
@@ -222,6 +225,13 @@ REGLAS CRÍTICAS:
 - recommended_fix_es NUNCA puede ser "" — siempre debe tener acción concreta
 - Si encuentras múltiples partidos que violan la misma regla, agrúpalos en UNA violación con todos los affected_match_ids y explain todos en explanation_es
 - summary_es debe ser específico: mencionar qué categorías y cuántos partidos tienen problemas
+
+SCOPING DE RESTRICCIONES (CRÍTICO):
+- Las restricciones en category_parsed_constraints[catId] se aplican SOLO a partidos donde categoryId === catId
+- Las restricciones en parsed_constraints (org/torneo) se aplican a TODOS los partidos
+- Nunca apliques una restricción de categoría a partidos de otras categorías
+- Cuando una restricción en category_contexts/category_parsed_constraints suena "global" (sin mencionar una cancha, equipo o fecha específica — ej: "no más de 1 partido por semana por equipo", "partidos los viernes y sábados"), agrégala a missing_interpretations así:
+  { "prompt_excerpt": "[cita exacta]", "issue_es": "Esta restricción está definida en el contexto de [nombre de categoría] y solo aplica a esa categoría. Si debe aplicar a todas las categorías, debe moverse al contexto del torneo.", "suggested_question_es": "¿Esta restricción aplica solo a [nombre de categoría] o a todas las categorías del torneo?" }
 
 VERIFICACIÓN DE IDs (CRÍTICO — evita errores de mapeo):
 - Al incluir un ID en affected_match_ids, SIEMPRE verifica que el campo homeTeamName o awayTeamName del partido con ese ID efectivamente corresponde al equipo mencionado en explanation_es
@@ -317,6 +327,146 @@ export function mockAuditFixture(input: AuditInput): AuditReport {
         recommended_fix_es: `Reprogramar a ${orgPlayDays.join(" o ")}.`,
         machine_recommendation: { action: "move_match", patch: null },
       });
+    }
+  }
+
+  // 1b. Category-scoped time restrictions (only checked against matches in that category)
+  for (const [catId, catC] of Object.entries(catConstraintsMap)) {
+    const catTimeRestrictions = (catC.timeRestrictions as Array<{
+      target: string; afterTime?: string; beforeTime?: string;
+    }> | undefined) ?? [];
+    if (catTimeRestrictions.length === 0) continue;
+    const catMatches = input.proposedMatches.filter((m) => m.categoryId === catId);
+    for (const restriction of catTimeRestrictions) {
+      for (const match of catMatches) {
+        if (!match.startTime) continue;
+        const homeName = match.homeTeamId ? (input.teamNames[match.homeTeamId] ?? "") : "";
+        const awayName = match.awayTeamId ? (input.teamNames[match.awayTeamId] ?? "") : "";
+        const target = restriction.target.toLowerCase();
+        if (!homeName.toLowerCase().includes(target) && !awayName.toLowerCase().includes(target)) continue;
+        if (restriction.afterTime && match.startTime < restriction.afterTime) {
+          violations.push({
+            severity: "error",
+            type: "constraint_conflict",
+            context_source: "category",
+            human_prompt_excerpt: `${restriction.target} después de las ${restriction.afterTime}`,
+            affected_match_ids: [match.id],
+            affected_category_ids: [catId],
+            explanation_es: `Partido con ${restriction.target} programado a las ${match.startTime}, pero en esta categoría debe ser después de las ${restriction.afterTime}.`,
+            recommended_fix_es: `Mover el partido a partir de las ${restriction.afterTime}.`,
+            machine_recommendation: {
+              action: "change_time",
+              patch: { matchId: match.id, newStartTime: restriction.afterTime },
+            },
+          });
+        }
+        if (restriction.beforeTime && match.startTime >= restriction.beforeTime) {
+          violations.push({
+            severity: "error",
+            type: "constraint_conflict",
+            context_source: "category",
+            human_prompt_excerpt: `${restriction.target} antes de las ${restriction.beforeTime}`,
+            affected_match_ids: [match.id],
+            affected_category_ids: [catId],
+            explanation_es: `Partido con ${restriction.target} programado a las ${match.startTime}, pero en esta categoría debe ser antes de las ${restriction.beforeTime}.`,
+            recommended_fix_es: `Mover el partido antes de las ${restriction.beforeTime}.`,
+            machine_recommendation: {
+              action: "change_time",
+              patch: { matchId: match.id, newStartTime: null },
+            },
+          });
+        }
+      }
+    }
+  }
+
+  // 1c. Category-scoped minDaysBetweenMatches
+  for (const [catId, catC] of Object.entries(catConstraintsMap)) {
+    const minDays = catC.minDaysBetweenMatches as number | undefined;
+    if (!minDays) continue;
+    const catMatches = input.proposedMatches.filter((m) => m.categoryId === catId && m.scheduledDate);
+    const matchesByTeam = new Map<string, typeof catMatches>();
+    for (const match of catMatches) {
+      for (const teamId of [match.homeTeamId, match.awayTeamId]) {
+        if (!teamId) continue;
+        if (!matchesByTeam.has(teamId)) matchesByTeam.set(teamId, []);
+        matchesByTeam.get(teamId)!.push(match);
+      }
+    }
+    for (const [teamId, teamMatches] of matchesByTeam.entries()) {
+      if (teamMatches.length < 2) continue;
+      const sorted = [...teamMatches].sort((a, b) => a.scheduledDate!.localeCompare(b.scheduledDate!));
+      for (let i = 1; i < sorted.length; i++) {
+        const prev = sorted[i - 1];
+        const curr = sorted[i];
+        const days = Math.floor(
+          (new Date(curr.scheduledDate! + "T12:00:00").getTime() -
+            new Date(prev.scheduledDate! + "T12:00:00").getTime()) /
+          86400000
+        );
+        if (days < minDays) {
+          const teamName = input.teamNames[teamId] ?? teamId;
+          violations.push({
+            severity: "error",
+            type: "constraint_conflict",
+            context_source: "category",
+            human_prompt_excerpt: `No más de un partido cada ${minDays} días`,
+            affected_match_ids: [prev.id, curr.id],
+            affected_category_ids: [catId],
+            explanation_es: `El equipo ${teamName} tiene partidos con solo ${days} día(s) de diferencia (${prev.scheduledDate} y ${curr.scheduledDate}), violando la restricción de al menos ${minDays} días entre partidos en esta categoría.`,
+            recommended_fix_es: `Reprogramar uno de los dos partidos de ${teamName} para que haya al menos ${minDays} días de diferencia.`,
+            machine_recommendation: { action: "move_match", patch: { matchId: curr.id } },
+          });
+        }
+      }
+    }
+  }
+
+  // 1d. Org/tournament-level minDaysBetweenMatches (global, all categories)
+  const orgMinDays = constraints.minDaysBetweenMatches as number | undefined;
+  if (orgMinDays) {
+    const catsWithCatMinDays = new Set(
+      Object.entries(catConstraintsMap)
+        .filter(([, c]) => (c.minDaysBetweenMatches as number | undefined))
+        .map(([id]) => id)
+    );
+    const globalMatches = input.proposedMatches.filter(
+      (m) => !catsWithCatMinDays.has(m.categoryId) && m.scheduledDate
+    );
+    const matchesByTeam = new Map<string, typeof globalMatches>();
+    for (const match of globalMatches) {
+      for (const teamId of [match.homeTeamId, match.awayTeamId]) {
+        if (!teamId) continue;
+        if (!matchesByTeam.has(teamId)) matchesByTeam.set(teamId, []);
+        matchesByTeam.get(teamId)!.push(match);
+      }
+    }
+    for (const [teamId, teamMatches] of matchesByTeam.entries()) {
+      if (teamMatches.length < 2) continue;
+      const sorted = [...teamMatches].sort((a, b) => a.scheduledDate!.localeCompare(b.scheduledDate!));
+      for (let i = 1; i < sorted.length; i++) {
+        const prev = sorted[i - 1];
+        const curr = sorted[i];
+        const days = Math.floor(
+          (new Date(curr.scheduledDate! + "T12:00:00").getTime() -
+            new Date(prev.scheduledDate! + "T12:00:00").getTime()) /
+          86400000
+        );
+        if (days < orgMinDays) {
+          const teamName = input.teamNames[teamId] ?? teamId;
+          violations.push({
+            severity: "error",
+            type: "constraint_conflict",
+            context_source: "organization",
+            human_prompt_excerpt: `No más de un partido cada ${orgMinDays} días`,
+            affected_match_ids: [prev.id, curr.id],
+            affected_category_ids: [prev.categoryId, curr.categoryId].filter((v, i, a) => a.indexOf(v) === i),
+            explanation_es: `El equipo ${teamName} tiene partidos con solo ${days} día(s) de diferencia (${prev.scheduledDate} y ${curr.scheduledDate}), violando la restricción de al menos ${orgMinDays} días entre partidos.`,
+            recommended_fix_es: `Reprogramar uno de los dos partidos de ${teamName} para que haya al menos ${orgMinDays} días de diferencia.`,
+            machine_recommendation: { action: "move_match", patch: { matchId: curr.id } },
+          });
+        }
+      }
     }
   }
 

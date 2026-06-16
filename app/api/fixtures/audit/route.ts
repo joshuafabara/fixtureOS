@@ -9,6 +9,7 @@ import {
   manualOverrides,
   contextVersions,
   teams,
+  categories,
   aiAuditReports,
 } from "@/lib/db/schema";
 import { eq, and, desc } from "drizzle-orm";
@@ -81,6 +82,13 @@ export async function POST(req: NextRequest) {
     .from(teams)
     .where(eq(teams.organizationId, orgId));
   const teamNames: Record<string, string> = Object.fromEntries(allTeams.map((t) => [t.id, t.name]));
+
+  // Load category names for this org
+  const allCategories = await db
+    .select({ id: categories.id, name: categories.name })
+    .from(categories)
+    .where(eq(categories.organizationId, orgId));
+  const catNameMap = new Map(allCategories.map((c) => [c.id, c.name]));
 
   // Load context versions: org scope
   const orgContexts = await db
@@ -188,7 +196,7 @@ export async function POST(req: NextRequest) {
     tournamentContextPrompt: tournamentContexts[0]?.rawPrompt ?? "",
     categoryContextPrompts: Array.from(latestCategoryContextByScopeId.values()).map((cv) => ({
       categoryId: cv.scopeId ?? "",
-      categoryName: cv.scopeId ?? "",
+      categoryName: catNameMap.get(cv.scopeId ?? "") ?? cv.scopeId ?? "",
       prompt: cv.rawPrompt,
     })),
     dateContextPrompts: dateContexts.map((cv) => ({

@@ -170,18 +170,26 @@ export function parseContextPrompt(
   }
 
   // ─── MIN DAYS BETWEEN MATCHES ──────────────────────────────────────────────
-  const minDaysPatterns: RegExp[] = [
-    /(?:no\s+)?(?:más\s+de\s+un\s+partido\s+cada|un\s+partido\s+cada)\s+(\d+)\s+días?/,
-    /(\d+)\s+días?\s+(?:entre\s+partidos|de\s+descanso|de\s+diferencia)/,
-    /al\s+menos\s+(\d+)\s+días?\s+entre/,
-    /mínimo\s+(?:de\s+)?(\d+)\s+días?\s+entre/,
-    /cada\s+(\d+)\s+días?\s+(?:para|por|en)/,
-  ];
-  for (const p of minDaysPatterns) {
-    const m = text.match(p);
-    if (m) {
-      result.minDaysBetweenMatches = parseInt(m[1], 10);
-      break;
+  // "1 partido por/cada semana" → 7 days (checked before the numeric patterns)
+  const weeklyMatch =
+    /(?:no\s+m[aá]s\s+de\s+)?(?:un|1|uno)\s+partido\s+(?:cada\s+semana|por\s+semana|a\s+la\s+semana|semanal)/i.test(text) ||
+    /(?:no\s+m[aá]s\s+de\s+un\s+partido\s+(?:por|cada|al?)\s+semana)/i.test(text);
+  if (weeklyMatch) {
+    result.minDaysBetweenMatches = 7;
+  } else {
+    const minDaysPatterns: RegExp[] = [
+      /(?:no\s+)?(?:más\s+de\s+un\s+partido\s+cada|un\s+partido\s+cada)\s+(\d+)\s+días?/,
+      /(\d+)\s+días?\s+(?:entre\s+partidos|de\s+descanso|de\s+diferencia)/,
+      /al\s+menos\s+(\d+)\s+días?\s+entre/,
+      /mínimo\s+(?:de\s+)?(\d+)\s+días?\s+entre/,
+      /cada\s+(\d+)\s+días?\s+(?:para|por|en)/,
+    ];
+    for (const p of minDaysPatterns) {
+      const m = text.match(p);
+      if (m) {
+        result.minDaysBetweenMatches = parseInt(m[1], 10);
+        break;
+      }
     }
   }
 

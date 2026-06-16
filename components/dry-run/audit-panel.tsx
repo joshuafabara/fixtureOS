@@ -1,18 +1,21 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   ShieldCheck, ShieldAlert, ShieldX, Sparkles, ChevronDown, ChevronUp,
   AlertTriangle, Info, XCircle, CheckCircle, Loader2, ArrowRight, Clock, MapPin, Target,
+  Wand2, Send, Check, X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AuditReport, AuditViolation, MachineAction } from "@/lib/ai/fixture-auditor";
+import type { MatchPatch } from "@/lib/ai/fixture-editor";
 
 type Props = {
   dryRunId: string;
   initialReport: AuditReport | null;
   onReportChange?: (report: AuditReport | null) => void;
+  onPatchesApplied?: () => void;
 };
 
 const ACTION_LABELS: Partial<Record<MachineAction, { label: string; icon: React.ReactNode }>> = {
@@ -128,11 +131,69 @@ function ViolationItem({ v, dryRunId }: { v: AuditViolation; dryRunId: string })
   );
 }
 
-export function AuditPanel({ dryRunId, initialReport, onReportChange }: Props) {
+export function AuditPanel({ dryRunId, initialReport, onReportChange, onPatchesApplied }: Props) {
   const [report, setReport] = useState<AuditReport | null>(initialReport);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showAll, setShowAll] = useState(false);
+
+  // AI editor state
+  const [aiRequest, setAiRequest] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<{
+    patches: MatchPatch[];
+    summary_es: string;
+  } | null>(null);
+  const [selectedPatches, setSelectedPatches] = useState<Set<number>>(new Set());
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyResult, setApplyResult] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  async function requestAiEdit() {
+    if (!aiRequest.trim()) return;
+    setAiLoading(true);
+    setAiSuggestions(null);
+    setApplyResult(null);
+    try {
+      const res = await fetch(`/api/dry-run/${dryRunId}/ai-edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: aiRequest }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error");
+      setAiSuggestions(data);
+      setSelectedPatches(new Set(data.patches.map((_: MatchPatch, i: number) => i)));
+    } catch (e) {
+      setApplyResult(e instanceof Error ? e.message : "Error al procesar solicitud");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function applySelectedPatches() {
+    if (!aiSuggestions) return;
+    const toApply = aiSuggestions.patches.filter((_, i) => selectedPatches.has(i));
+    if (toApply.length === 0) return;
+    setApplyLoading(true);
+    try {
+      const res = await fetch(`/api/dry-run/${dryRunId}/apply-patch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patches: toApply }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error al aplicar cambios");
+      setApplyResult(`${data.applied.length} cambio(s) aplicado(s). Recarga la página para ver el resultado.`);
+      setAiSuggestions(null);
+      setAiRequest("");
+      onPatchesApplied?.();
+    } catch (e) {
+      setApplyResult(e instanceof Error ? e.message : "Error al aplicar cambios");
+    } finally {
+      setApplyLoading(false);
+    }
+  }
 
   async function runAudit() {
     setLoading(true);
@@ -242,7 +303,56 @@ export function AuditPanel({ dryRunId, initialReport, onReportChange }: Props) {
         </div>
       )}
 
-      {/* Missing interpretations */}
+      {/* Suggested fixes — actionable recommendations from violations */}
+      {report.violations.some((v) => v.recommended_fix_es?.trim()) && (
+        <div className="rounded-lg border bg-background p-2.5 space-y-1.5">
+          <p className="text-xs font-semibold flex items-center gap-1.5">
+            <Wand2 className="h-3 w-3 text-brand-500" /> Correcciones sugeridas
+          </p>
+          {report.violations
+            .filter((v) => v.recommended_fix_es?.trim())
+            .slice(0, 5)
+            .map((v, i) => {
+              const canApply = Boolean(
+                v.machine_recommendation?.action === "change_time" &&
+                v.machine_recommendation?.patch &&
+                (v.machine_recommendation.patch as Record<string, unknown>).newStartTime
+              );
+              return (
+                <div key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                  <span className="mt-0.5 shrink-0">
+                    {v.severity === "error"
+                      ? <XCircle className="h-3 w-3 text-red-500" />
+                      : <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                  </span>
+                  <span className="flex-1 leading-snug">{v.recommended_fix_es}</span>
+                  {canApply && (
+                    <button
+                      className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded bg-brand-500/10 text-brand-600 hover:bg-brand-500/20 transition-colors"
+                      onClick={async () => {
+                        const patch = v.machine_recommendation.patch as Record<string, unknown>;
+                        for (const id of v.affected_match_ids ?? []) {
+                          await fetch(`/api/dry-run/${dryRunId}/apply-patch`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              patches: [{ matchId: id, changes: { startTime: patch.newStartTime }, explanation_es: v.recommended_fix_es }],
+                            }),
+                          });
+                        }
+                        onPatchesApplied?.();
+                      }}
+                    >
+                      Aplicar
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+        </div>
+      )}
+
+      {/* Scope notices from missing_interpretations */}
       {report.missing_interpretations.length > 0 && (
         <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-2.5 space-y-1">
           <p className="text-xs font-semibold text-blue-700 dark:text-blue-400">Requiere verificación</p>
@@ -251,6 +361,85 @@ export function AuditPanel({ dryRunId, initialReport, onReportChange }: Props) {
           ))}
         </div>
       )}
+
+      {/* AI edit textarea */}
+      <div className="rounded-lg border bg-background p-2.5 space-y-2">
+        <p className="text-xs font-semibold flex items-center gap-1.5">
+          <Sparkles className="h-3 w-3 text-brand-500" /> Pedir cambio a la IA
+        </p>
+        <div className="flex gap-2">
+          <textarea
+            ref={textareaRef}
+            value={aiRequest}
+            onChange={(e) => setAiRequest(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); requestAiEdit(); } }}
+            placeholder="Ej: Mover todos los partidos de Crossover a después de la 1pm"
+            className="flex-1 text-xs rounded-md border border-border bg-muted/40 px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-muted-foreground/60"
+            rows={2}
+            disabled={aiLoading}
+          />
+          <button
+            onClick={requestAiEdit}
+            disabled={aiLoading || !aiRequest.trim()}
+            className="self-end p-2 rounded-md bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50 transition-colors"
+          >
+            {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </button>
+        </div>
+
+        {/* AI suggestions preview */}
+        {aiSuggestions && (
+          <div className="space-y-1.5 mt-1">
+            <p className="text-[10px] text-muted-foreground">{aiSuggestions.summary_es}</p>
+            {aiSuggestions.patches.length === 0 && (
+              <p className="text-xs text-muted-foreground italic">No se encontraron cambios para aplicar.</p>
+            )}
+            {aiSuggestions.patches.map((patch, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <button
+                  onClick={() => {
+                    setSelectedPatches((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(i)) next.delete(i); else next.add(i);
+                      return next;
+                    });
+                  }}
+                  className={`mt-0.5 shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                    selectedPatches.has(i)
+                      ? "bg-brand-500 border-brand-500 text-white"
+                      : "border-border bg-background"
+                  }`}
+                >
+                  {selectedPatches.has(i) && <Check className="h-2.5 w-2.5" />}
+                </button>
+                <span className="flex-1 leading-snug text-muted-foreground">{patch.explanation_es}</span>
+              </div>
+            ))}
+            {aiSuggestions.patches.length > 0 && (
+              <button
+                onClick={applySelectedPatches}
+                disabled={applyLoading || selectedPatches.size === 0}
+                className="w-full mt-1 text-xs font-semibold py-1.5 rounded-md bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+              >
+                {applyLoading
+                  ? <><Loader2 className="h-3 w-3 animate-spin" /> Aplicando…</>
+                  : <><Check className="h-3 w-3" /> Aplicar {selectedPatches.size} cambio{selectedPatches.size !== 1 ? "s" : ""}</>
+                }
+              </button>
+            )}
+            <button
+              onClick={() => { setAiSuggestions(null); setAiRequest(""); }}
+              className="text-[10px] text-muted-foreground hover:text-foreground underline"
+            >
+              Cancelar
+            </button>
+          </div>
+        )}
+
+        {applyResult && (
+          <p className="text-[10px] text-muted-foreground mt-1">{applyResult}</p>
+        )}
+      </div>
 
       {error && <p className="text-xs text-red-600">{error}</p>}
 
