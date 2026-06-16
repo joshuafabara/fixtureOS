@@ -31,3 +31,27 @@ export function VersionSwitcher({ versions, selectedVersionNumber, tournamentId,
     </select>
   );
 }
+
+type EditVersionSwitcherProps = {
+  tournamentId: string;
+  currentVersion: number;
+  versions: { versionNumber: number; label: string }[];
+};
+
+export function EditVersionSwitcher({ tournamentId, currentVersion, versions }: EditVersionSwitcherProps) {
+  return (
+    <select
+      value={currentVersion}
+      onChange={(e) => {
+        window.location.href = `/fixture/${tournamentId}/edit?v=${e.target.value}`;
+      }}
+      className="text-sm border border-border rounded-md px-2 py-1.5 bg-background"
+    >
+      {versions.map((v) => (
+        <option key={v.versionNumber} value={v.versionNumber}>
+          {v.label}
+        </option>
+      ))}
+    </select>
+  );
+}

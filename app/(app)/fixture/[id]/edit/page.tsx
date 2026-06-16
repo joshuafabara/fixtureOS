@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, History } from "lucide-react";
 import { MatchEditor } from "@/components/fixture/match-editor";
+import { EditVersionSwitcher } from "@/components/fixture/version-switcher";
 
 const STATE_LABEL: Record<string, string> = {
   draft: "Borrador", published: "Publicado", archived: "Archivado",
@@ -147,19 +148,14 @@ export default async function ManualEditPage({
         <div className="flex items-center gap-2">
           {/* Version switcher */}
           {allVersions.length > 1 && (
-            <select
-              defaultValue={version.versionNumber}
-              onChange={(e) => {
-                window.location.href = `/fixture/${tournamentId}/edit?v=${e.target.value}`;
-              }}
-              className="text-sm border border-border rounded-md px-2 py-1.5 bg-background"
-            >
-              {allVersions.map((v) => (
-                <option key={v.id} value={v.versionNumber}>
-                  V{v.versionNumber} · {STATE_LABEL[v.state] ?? v.state}
-                </option>
-              ))}
-            </select>
+            <EditVersionSwitcher
+              tournamentId={tournamentId}
+              currentVersion={version.versionNumber}
+              versions={allVersions.map((v) => ({
+                versionNumber: v.versionNumber,
+                label: `V${v.versionNumber} · ${STATE_LABEL[v.state] ?? v.state}`,
+              }))}
+            />
           )}
           <Button variant="outline" size="sm" asChild>
             <Link href={`/fixture/${tournamentId}/history`}>
