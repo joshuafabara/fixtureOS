@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { db } from "@/lib/db";
@@ -191,7 +193,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  let systemContextPrompt = "";
+  try {
+    systemContextPrompt = readFileSync(join(process.cwd(), "config/system-context.txt"), "utf-8");
+  } catch {
+    // file missing or unreadable — audit continues without system context
+  }
+
   const input: AuditInput = {
+    systemContextPrompt,
     organizationContextPrompt: orgContexts[0]?.rawPrompt ?? "",
     tournamentContextPrompt: tournamentContexts[0]?.rawPrompt ?? "",
     categoryContextPrompts: Array.from(latestCategoryContextByScopeId.values()).map((cv) => ({

@@ -1,0 +1,13 @@
+# FixtureOS — System Context
+# This file is the global baseline for ALL audits across every organization and tournament.
+# Rules here are lowest priority: org/tournament/category/date contexts override them.
+# Edit this file freely — no deploy needed, it's read at audit time from disk.
+
+Los partidos deben tener una duración mínima de 60 minutos y máxima de 120 minutos.
+No se pueden programar más de 4 partidos simultáneos en el mismo recinto deportivo.
+Debe existir un mínimo de 30 minutos de pausa entre partidos en la misma cancha.
+Los partidos no pueden comenzar antes de las 08:00 ni terminar después de las 23:00.
+Cada equipo debe tener al menos 1 hora de descanso entre un partido y el siguiente.
+No se pueden programar partidos en fechas que sean feriados nacionales sin aprobación explícita.
+En fases de eliminación directa (playoffs, semifinal, final), los partidos deben programarse con al menos 48 horas de diferencia entre fases.
+Los partidos de la misma categoría no pueden solaparse en la misma cancha.

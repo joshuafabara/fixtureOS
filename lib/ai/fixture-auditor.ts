@@ -97,6 +97,7 @@ export type ManualOverride = {
 };
 
 export type AuditInput = {
+  systemContextPrompt?: string;
   organizationContextPrompt: string;
   tournamentContextPrompt: string;
   categoryContextPrompts: Array<{ categoryId: string; categoryName: string; prompt: string }>;
@@ -790,6 +791,7 @@ export async function auditFixture(input: AuditInput): Promise<AuditReport> {
   if (!client) return mockAuditFixture(input);
 
   const userPayload = JSON.stringify({
+    system_context: input.systemContextPrompt ?? "",
     organization_context: input.organizationContextPrompt,
     tournament_context: input.tournamentContextPrompt,
     category_contexts: input.categoryContextPrompts,
