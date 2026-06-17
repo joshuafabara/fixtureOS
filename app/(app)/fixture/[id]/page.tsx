@@ -1,6 +1,6 @@
 import { requireOrg } from "@/lib/auth/session";
 import { db } from "@/lib/db";
-import { fixtureVersions, matches, tournaments, categories, teams, courts } from "@/lib/db/schema";
+import { fixtureVersions, matches, tournaments, categories, teams, clubs, courts } from "@/lib/db/schema";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import Link from "next/link";
@@ -93,12 +93,21 @@ export default async function FixtureViewerPage({
     .where(eq(matches.fixtureVersionId, selectedVersion.id))
     .orderBy(asc(matches.scheduledDate), asc(matches.startTime));
 
-  // Load all teams for away team lookup
+  // Load all teams (with clubId) for away team lookup + club resolution
   const allTeams = await db
-    .select({ id: teams.id, name: teams.name })
+    .select({ id: teams.id, name: teams.name, clubId: teams.clubId })
     .from(teams)
     .where(eq(teams.organizationId, orgId));
   const teamMap = new Map(allTeams.map((t) => [t.id, t.name]));
+
+  const allClubs = await db
+    .select({ id: clubs.id, name: clubs.name })
+    .from(clubs)
+    .where(eq(clubs.organizationId, orgId));
+  const clubMap = new Map(allClubs.map((c) => [c.id, c.name]));
+  const teamClubMap = new Map(
+    allTeams.filter((t) => t.clubId).map((t) => [t.id, clubMap.get(t.clubId!) ?? null])
+  );
 
   const matchesWithAway = rawMatches.map((m) => ({
     id: m.id,
@@ -106,7 +115,9 @@ export default async function FixtureViewerPage({
     startTime: m.startTime ?? null,
     endTime: m.endTime ?? null,
     homeTeamName: m.homeTeamName ?? null,
+    homeClubName: m.homeTeamId ? (teamClubMap.get(m.homeTeamId) ?? null) : null,
     awayTeamName: m.awayTeamId ? (teamMap.get(m.awayTeamId) ?? null) : null,
+    awayClubName: m.awayTeamId ? (teamClubMap.get(m.awayTeamId) ?? null) : null,
     courtName: m.courtName ?? null,
     categoryId: m.categoryId ?? "",
     categoryName: m.categoryName ?? null,

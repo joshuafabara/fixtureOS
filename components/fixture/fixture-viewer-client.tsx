@@ -10,7 +10,9 @@ export type MatchRow = {
   startTime: string | null;
   endTime: string | null;
   homeTeamName: string | null;
+  homeClubName: string | null;
   awayTeamName: string | null;
+  awayClubName: string | null;
   courtName: string | null;
   categoryId: string;
   categoryName: string | null;
@@ -357,12 +359,13 @@ function StatePill({ state }: { state: string }) {
 }
 
 // ── Calendar View ──────────────────────────────────────────────────────────
-function CalendarView({ dayKey, matches, courtNames, activeCats, courtFilter }: {
+function CalendarView({ dayKey, matches, courtNames, activeCats, courtFilter, activeClub }: {
   dayKey: string;
   matches: MatchRow[];
   courtNames: string[];
   activeCats: Set<string>;
   courtFilter: string;
+  activeClub: string;
 }) {
   const visibleCourts = courtFilter === "all"
     ? courtNames
@@ -371,7 +374,8 @@ function CalendarView({ dayKey, matches, courtNames, activeCats, courtFilter }: 
   const dayMatches = matches.filter(
     (m) => m.scheduledDate === dayKey &&
       activeCats.has(m.categoryId) &&
-      (courtFilter === "all" || m.courtName === courtFilter)
+      (courtFilter === "all" || m.courtName === courtFilter) &&
+      (activeClub === "all" || m.homeClubName === activeClub || m.awayClubName === activeClub)
   );
 
   // Compute slot range from actual match times
@@ -512,11 +516,12 @@ function CalendarView({ dayKey, matches, courtNames, activeCats, courtFilter }: 
 }
 
 // ── Cards View ─────────────────────────────────────────────────────────────
-function CardsView({ dates, matches, activeCats, courtFilter, tournamentId, versionId }: {
+function CardsView({ dates, matches, activeCats, courtFilter, activeClub, tournamentId, versionId }: {
   dates: string[];
   matches: MatchRow[];
   activeCats: Set<string>;
   courtFilter: string;
+  activeClub: string;
   tournamentId: string;
   versionId: string;
 }) {
@@ -526,7 +531,8 @@ function CardsView({ dates, matches, activeCats, courtFilter, tournamentId, vers
         const rows = matches.filter(
           (m) => m.scheduledDate === dateKey &&
             activeCats.has(m.categoryId) &&
-            (courtFilter === "all" || m.courtName === courtFilter)
+            (courtFilter === "all" || m.courtName === courtFilter) &&
+            (activeClub === "all" || m.homeClubName === activeClub || m.awayClubName === activeClub)
         ).sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
 
         if (rows.length === 0) return null;
@@ -632,6 +638,7 @@ export function FixtureViewerClient({
   const [view, setView] = useState<"calendar" | "cards">("calendar");
   const [activeCats, setActiveCats] = useState<Set<string>>(() => new Set(categories.map((c) => c.id)));
   const [courtFilter, setCourtFilter] = useState("all");
+  const [activeClub, setActiveClub] = useState("all");
 
   const sortedDates = useMemo(() => {
     const all = [...new Set(matches.map((m) => m.scheduledDate))].sort();
@@ -660,6 +667,18 @@ export function FixtureViewerClient({
     { v: "all", l: "Todas las canchas" },
     ...courtNames.map((c) => ({ v: c, l: c })),
   ], [courtNames]);
+
+  const allClubs = useMemo(() => {
+    const names = matches
+      .flatMap((m) => [m.homeClubName, m.awayClubName])
+      .filter((n): n is string => !!n);
+    return [...new Set(names)].sort();
+  }, [matches]);
+
+  const clubOptions = useMemo(() => [
+    { v: "all", l: "Todos los clubes" },
+    ...allClubs.map((c) => ({ v: c, l: c })),
+  ], [allClubs]);
 
   const versionOptions = allVersions.map((v) => ({
     v: String(v.versionNumber),
@@ -743,6 +762,9 @@ export function FixtureViewerClient({
           <div style={{ width: 1, height: 26, background: "#e6eaf0" }} />
           <DateFilter allDates={sortedDates} mode={dateMode} onChange={setDateMode} />
           <MiniSelect value={courtFilter} onChange={setCourtFilter} options={courtOptions} />
+          {allClubs.length > 0 && (
+            <MiniSelect value={activeClub} onChange={setActiveClub} options={clubOptions} />
+          )}
           <div style={{ flex: 1 }} />
           <CatChips cats={categories} active={activeCats} onToggle={toggleCat} />
         </div>
@@ -766,6 +788,7 @@ export function FixtureViewerClient({
               courtNames={courtNames}
               activeCats={activeCats}
               courtFilter={courtFilter}
+              activeClub={activeClub}
             />
           ))}
           {visibleDates.length > calendarVisible && (
@@ -793,6 +816,7 @@ export function FixtureViewerClient({
           matches={matches}
           activeCats={activeCats}
           courtFilter={courtFilter}
+          activeClub={activeClub}
           tournamentId={tournamentId}
           versionId={versionId}
         />

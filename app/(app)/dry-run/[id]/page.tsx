@@ -1,7 +1,7 @@
 import { requireOrg } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import {
-  dryRuns, dryRunChanges, tournaments, teams, categories, aiAuditReports,
+  dryRuns, dryRunChanges, tournaments, teams, categories, clubs, aiAuditReports,
 } from "@/lib/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import type { AuditReport } from "@/lib/ai/fixture-auditor";
@@ -64,10 +64,19 @@ export default async function DryRunDetailPage({
     .where(eq(dryRunChanges.dryRunId, dryRun.id));
 
   const allTeams = await db
-    .select({ id: teams.id, name: teams.name })
+    .select({ id: teams.id, name: teams.name, clubId: teams.clubId })
     .from(teams)
     .where(eq(teams.organizationId, orgId));
   const teamMap = new Map(allTeams.map((t) => [t.id, t.name]));
+
+  const allClubs = await db
+    .select({ id: clubs.id, name: clubs.name })
+    .from(clubs)
+    .where(eq(clubs.organizationId, orgId));
+  const clubMap = new Map(allClubs.map((c) => [c.id, c.name]));
+  const teamClubMap = new Map(
+    allTeams.filter((t) => t.clubId).map((t) => [t.id, clubMap.get(t.clubId!) ?? null])
+  );
 
   const allCategories = await db
     .select({ id: categories.id, name: categories.name, colorHex: categories.colorHex })
@@ -98,8 +107,10 @@ export default async function DryRunDetailPage({
       categoryColorHex: cat?.colorHex ?? null,
       homeTeamId: m.homeTeamId ?? null,
       homeTeamName: m.homeTeamId ? (teamMap.get(m.homeTeamId) ?? m.homeTeamId.slice(0, 8)) : "—",
+      homeClubName: m.homeTeamId ? (teamClubMap.get(m.homeTeamId) ?? null) : null,
       awayTeamId: m.awayTeamId ?? null,
       awayTeamName: m.awayTeamId ? (teamMap.get(m.awayTeamId) ?? m.awayTeamId.slice(0, 8)) : "—",
+      awayClubName: m.awayTeamId ? (teamClubMap.get(m.awayTeamId) ?? null) : null,
       scheduledDate: m.date ?? null,
       startTime: m.startTime ?? null,
       endTime: m.endTime ?? null,

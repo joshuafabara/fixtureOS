@@ -16,8 +16,10 @@ export type DryRunMatchRow = {
   categoryColorHex: string | null;
   homeTeamId: string | null;
   homeTeamName: string;
+  homeClubName: string | null;
   awayTeamId: string | null;
   awayTeamName: string;
+  awayClubName: string | null;
   scheduledDate: string | null;
   startTime: string | null;
   endTime: string | null;
@@ -178,12 +180,13 @@ function SegTabs({ value, onChange, options }: {
 
 // ── Calendar view ──────────────────────────────────────────────────────────────
 
-function CalendarDayView({ dayKey, matches, courtNames, activeCats, courtFilter, auditInfo }: {
+function CalendarDayView({ dayKey, matches, courtNames, activeCats, courtFilter, activeClub, auditInfo }: {
   dayKey: string;
   matches: DryRunMatchRow[];
   courtNames: string[];
   activeCats: Set<string>;
   courtFilter: string;
+  activeClub: string;
   auditInfo: Map<string, AuditMatchInfo>;
 }) {
   const [openBadge, setOpenBadge] = useState<{ id: string; docX: number; docY: number; text: string; sev: "error" | "warning" } | null>(null);
@@ -208,7 +211,8 @@ function CalendarDayView({ dayKey, matches, courtNames, activeCats, courtFilter,
       m.scheduledDate === dayKey &&
       m.startTime !== null &&
       activeCats.has(m.categoryId) &&
-      (courtFilter === "all" || m.courtName === courtFilter)
+      (courtFilter === "all" || m.courtName === courtFilter) &&
+      (activeClub === "all" || m.homeClubName === activeClub || m.awayClubName === activeClub)
   );
 
   if (dayMatches.length === 0) return null;
@@ -394,13 +398,17 @@ function CalendarDayView({ dayKey, matches, courtNames, activeCats, courtFilter,
 
 // ── Cards view (existing list design) ─────────────────────────────────────────
 
-function CardsView({ rows, filter, auditInfo }: { rows: DryRunMatchRow[]; filter: string; auditInfo: Map<string, AuditMatchInfo> }) {
+function CardsView({ rows, filter, activeClub, auditInfo }: { rows: DryRunMatchRow[]; filter: string; activeClub: string; auditInfo: Map<string, AuditMatchInfo> }) {
   const [openBadgeId, setOpenBadgeId] = useState<string | null>(null);
 
-  const displayed = filter === "added"   ? rows.filter((r) => r.changeType === "add")
-                  : filter === "conflict" ? rows.filter((r) => r.changeType === "conflict")
-                  : filter === "warning"  ? rows.filter((r) => r.changeType === "warning")
-                  : rows;
+  const clubFiltered = activeClub === "all"
+    ? rows
+    : rows.filter((r) => r.homeClubName === activeClub || r.awayClubName === activeClub);
+
+  const displayed = filter === "added"   ? clubFiltered.filter((r) => r.changeType === "add")
+                  : filter === "conflict" ? clubFiltered.filter((r) => r.changeType === "conflict")
+                  : filter === "warning"  ? clubFiltered.filter((r) => r.changeType === "warning")
+                  : clubFiltered;
 
   function formatDate(dateStr: string) {
     return new Date(dateStr + "T12:00:00").toLocaleDateString("es-EC", {
@@ -589,6 +597,7 @@ export function DryRunChangesViewer({ rows, initialAuditReport }: Props) {
     new Set(rows.map((r) => r.categoryId))
   );
   const [courtFilter, setCourtFilter] = useState("all");
+  const [activeClub, setActiveClub]   = useState("all");
   const [calVisible, setCalVisible]   = useState(6);
   const [auditInfo, setAuditInfo]     = useState<Map<string, AuditMatchInfo>>(() =>
     buildMatchInfoFromReport(initialAuditReport ?? null, rows)
@@ -690,6 +699,18 @@ export function DryRunChangesViewer({ rows, initialAuditReport }: Props) {
     ...allCourtNames.map((c) => ({ v:c, l:c })),
   ], [allCourtNames]);
 
+  const allClubs = useMemo(() => {
+    const names = rows
+      .flatMap((r) => [r.homeClubName, r.awayClubName])
+      .filter((n): n is string => !!n);
+    return [...new Set(names)].sort();
+  }, [rows]);
+
+  const clubOptions = useMemo(() => [
+    { v:"all", l:"Todos los clubes" },
+    ...allClubs.map((c) => ({ v:c, l:c })),
+  ], [allClubs]);
+
   const filterTabs = [
     { key:"all",      label:`Todos (${rows.length})` },
     { key:"added",    label:`Añadidos (${addRows.length})` },
@@ -742,6 +763,28 @@ export function DryRunChangesViewer({ rows, initialAuditReport }: Props) {
             </select>
             <span style={{ position:"absolute", right:9, top:"50%", transform:"translateY(-50%)", pointerEvents:"none", color:"#64748b", fontSize:11 }}>▾</span>
           </div>
+
+          {/* Club filter */}
+          {allClubs.length > 0 && (
+            <div style={{ position:"relative", display:"inline-flex" }}>
+              <select
+                value={activeClub}
+                onChange={(e) => setActiveClub(e.target.value)}
+                style={{
+                  appearance:"none", WebkitAppearance:"none",
+                  padding:"7px 28px 7px 12px", borderRadius:10,
+                  border:`1px solid ${activeClub !== "all" ? "#0d9488" : "#d4dae3"}`,
+                  background: activeClub !== "all" ? "#f0fdfa" : "#fff",
+                  color: activeClub !== "all" ? "#0f766e" : "var(--foreground,#131c2e)",
+                  fontWeight:700, fontSize:13,
+                  fontFamily:"var(--font-sans)", cursor:"pointer",
+                }}
+              >
+                {clubOptions.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+              </select>
+              <span style={{ position:"absolute", right:9, top:"50%", transform:"translateY(-50%)", pointerEvents:"none", color: activeClub !== "all" ? "#0f766e" : "#64748b", fontSize:11 }}>▾</span>
+            </div>
+          )}
 
           {/* Category chips */}
           <div style={{ display:"flex", gap:6, flexWrap:"wrap", flex:1 }}>
@@ -811,6 +854,7 @@ export function DryRunChangesViewer({ rows, initialAuditReport }: Props) {
                 courtNames={allCourtNames}
                 activeCats={activeCats}
                 courtFilter={courtFilter}
+                activeClub={activeClub}
                 auditInfo={auditInfo}
               />
             ))}
@@ -905,7 +949,7 @@ export function DryRunChangesViewer({ rows, initialAuditReport }: Props) {
           </div>
         )
       ) : (
-        <CardsView rows={rows} filter={filter} auditInfo={auditInfo} />
+        <CardsView rows={rows} filter={filter} activeClub={activeClub} auditInfo={auditInfo} />
       )}
     </div>
   );
