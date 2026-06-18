@@ -85,8 +85,10 @@ const STATIC_ROUTES = [
   "/dry-run",
   "/matches",
   "/import",
+  "/imports",
   "/exports",
   "/audit",
+  "/communications",
   "/settings/courts",
   "/settings/organization",
   "/settings/users",
@@ -233,5 +235,34 @@ test.describe("Smoke — dynamic routes", () => {
     }
     const href = await link.getAttribute("href");
     await smokeGoto(page, href!);
+  });
+
+  // Import wizard steps — navigate from the history page.
+  // Pages redirect to earlier steps if the batch isn't in the right state;
+  // a 200 (or redirect to another step) is fine — we only care that there's
+  // no 500 / error overlay.
+  test("/imports/[id]/mapping (and later steps)", async ({ page }) => {
+    await page.goto("/imports");
+    await page.waitForLoadState("domcontentloaded");
+
+    // Look for any "Continuar" link that goes to a wizard step
+    const continueLink = page.locator("a[href*='/imports/']").first();
+    if (await continueLink.count() === 0) {
+      console.warn("  ⚠ No import batch links found — skipping wizard step checks");
+      return;
+    }
+    const href = await continueLink.getAttribute("href");
+    if (!href) return;
+
+    // Extract batch ID from whatever link we found
+    const match = href.match(/\/imports\/([^/]+)/);
+    if (!match) return;
+    const batchId = match[1];
+
+    // Test each wizard step — pages redirect between themselves so any
+    // landing page that isn't a 500 / error overlay is a pass.
+    for (const step of ["mapping", "diff", "errors", "confirm"]) {
+      await smokeGoto(page, `/imports/${batchId}/${step}`);
+    }
   });
 });

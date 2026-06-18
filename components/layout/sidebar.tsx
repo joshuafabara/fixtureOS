@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Trophy, Layers, Users, Building2, MessageSquare,
   MapPin, Settings, FileText, Download, ChevronLeft, ChevronRight,
-  Zap, GitCompare, ClipboardList, Sliders, Calendar,
+  Zap, GitCompare, ClipboardList, Sliders, Calendar, Upload,
 } from "lucide-react";
 
 const NAV = [
@@ -27,6 +27,7 @@ const NAV = [
       { label: "Simulador", href: "/context/impact-simulator" },
     ],
   },
+  { label: "Importaciones", icon: Upload, href: "/imports" },
   { label: "Partidos", icon: ClipboardList, href: "/matches" },
   { label: "Clubes", icon: Building2, href: "/clubs" },
   { label: "Comunicaciones", icon: MessageSquare, href: "/communications" },

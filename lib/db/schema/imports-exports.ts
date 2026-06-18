@@ -18,14 +18,28 @@ export const importBatches = pgTable("import_batches", {
   tournamentId: uuid("tournament_id").references(() => tournaments.id, {
     onDelete: "set null",
   }),
-  sourceType: text("source_type").notNull(), // drupal, excel, image
-  status: text("status").notNull().default("pending"), // pending, processing, completed, failed
+  // sourceType: excel | csv | image | drupal
+  sourceType: text("source_type").notNull(),
+  // mode: create (new tournament dataset) | update (diff against existing)
+  mode: text("mode").notNull().default("create"),
+  // status: uploaded → parsing → mapping → review → errors → ready → confirmed | rejected | failed
+  status: text("status").notNull().default("uploaded"),
   fileRef: text("file_ref"),
+  // parsed rows + auto-detected column mapping
+  mappingData: jsonb("mapping_data"),
+  // computed diff rows (ImpDiffRow[])
+  diffData: jsonb("diff_data"),
+  // rows that need manual resolution (ImpErrorRow[])
+  errorsData: jsonb("errors_data"),
+  // user decisions per error row  { [errorId]: number }
+  resolvedErrors: jsonb("resolved_errors"),
+  // final stats written on confirm
   summary: jsonb("summary"),
   createdBy: uuid("created_by")
     .notNull()
     .references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const fixtureExports = pgTable("exports", {

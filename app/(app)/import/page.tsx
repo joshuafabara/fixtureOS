@@ -3,9 +3,11 @@ import { db } from "@/lib/db";
 import { tournaments } from "@/lib/db/schema";
 import { eq, asc } from "drizzle-orm";
 import { Upload } from "lucide-react";
-import { ExcelImporter } from "@/components/import/excel-importer";
+import { ImportWizard } from "@/components/import/import-wizard";
 
-export default async function ImportPage() {
+export const metadata = { title: "Importar datos — FixtureOS" };
+
+export default async function ImportPage({ searchParams }: { searchParams: { mode?: string; source?: string; tournamentId?: string } }) {
   const orgId = await requireOrg();
 
   const tournamentList = await db
@@ -14,25 +16,27 @@ export default async function ImportPage() {
     .where(eq(tournaments.organizationId, orgId))
     .orderBy(asc(tournaments.name));
 
+  const mode = (searchParams.mode === "create" ? "create" : "update") as "create" | "update";
+  const source = (["excel", "csv", "image", "drupal"].includes(searchParams.source ?? "") ? searchParams.source : "excel") as "excel" | "csv" | "image" | "drupal";
+
   return (
-    <div className="p-6 space-y-6 max-w-2xl mx-auto">
-      <div className="flex items-center gap-3">
+    <div className="p-6">
+      <div className="flex items-center gap-3 mb-6">
         <div className="w-9 h-9 rounded-lg bg-foreground/5 flex items-center justify-center">
           <Upload className="h-5 w-5 text-muted-foreground" />
         </div>
         <div>
-          <h1 className="text-xl font-bold">Importar equipos</h1>
-          <p className="text-sm text-muted-foreground">Importa clubes, categorías y equipos desde Excel.</p>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Torneos</p>
+          <h1 className="text-xl font-extrabold">Importar Datos del Torneo</h1>
+          <p className="text-sm text-muted-foreground">Carga clubes, categorías y equipos. Nada cambia el fixture hasta aprobar un dry run.</p>
         </div>
       </div>
-
-      {tournamentList.length === 0 ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 px-5 py-4 text-sm text-amber-700 dark:text-amber-400">
-          Crea al menos un torneo antes de importar equipos.
-        </div>
-      ) : (
-        <ExcelImporter tournaments={tournamentList} />
-      )}
+      <ImportWizard
+        tournaments={tournamentList}
+        defaultMode={mode}
+        defaultSource={source}
+        defaultTournamentId={searchParams.tournamentId}
+      />
     </div>
   );
 }
