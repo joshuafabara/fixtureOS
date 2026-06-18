@@ -1,5 +1,5 @@
 name: fixtureos
-type: nodejs
+type: generic
 docroot: ""
 nodejs_version: "20"
 database:

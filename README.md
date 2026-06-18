@@ -16,10 +16,10 @@ Fixture management system for sports organizations — AI-assisted scheduling wi
 Requires [DDEV](https://ddev.readthedocs.io/en/stable/users/install/) and Docker (Colima on macOS).
 
 ```bash
-# 1. Start DDEV (first run installs deps + runs migrations automatically)
+# 1. Start DDEV (installs deps + runs migrations automatically)
 ddev start
 
-# 2. Seed the database with demo data
+# 2. Seed the database with demo data  ← first time only, or after a db:reset
 ddev exec npm run db:seed
 
 # 3. Open the app
@@ -27,6 +27,8 @@ ddev launch
 ```
 
 The app is now available at **https://fixtureos.ddev.site**
+
+> **Why is `db:seed` a manual step?** Seeding drops and recreates all demo data. Running it automatically on every `ddev start` would wipe any data you've added. Run it once on first setup, or any time you want to reset back to demo data.
 
 ### DDEV daily workflow
 
