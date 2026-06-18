@@ -127,8 +127,9 @@ npm run db:push      # Push schema directly (dev only — skips migration files)
 npm run db:studio    # Open Drizzle Studio (browser DB GUI)
 npm run db:seed      # Seed demo data (Liga Deportiva Quito + Copa Alpha 2026)
 
-npm run test         # Run Vitest unit tests
-npm run test:e2e     # Run Playwright E2E tests (requires app running on :3000)
+npm run test         # Run Vitest unit tests (181 tests, no server needed)
+npm run test:smoke   # Run Playwright smoke tests (31 screen-load checks)
+npm run test:e2e     # Run full Playwright E2E suite
 npm run test:e2e:ui  # Open Playwright interactive UI runner
 ```
 
@@ -194,10 +195,79 @@ npm run test:e2e:ui
 - Unauthenticated users are redirected to `/login`
 - Successful login with seed credentials lands on dashboard
 - Wrong credentials show an error message
-- Authenticated access to: dashboard, tournaments, teams, context, dry-run, clubs, categories
-- Dry run generation flow (conditional on seeded eligible categories)
+- All 21 static routes load without a server error (smoke)
+- Dynamic routes: tournaments, clubs, fixtures, context, dry-run, standings, import wizard steps
 
-> **Note for DDEV:** Run `npm run test:e2e` from your local machine pointing at `http://localhost:3000`, or proxy through the DDEV URL by setting `baseURL` in `playwright.config.ts`.
+**Running via DDEV:**
+```bash
+ddev exec "npm test"            # 181 unit tests (no browser needed)
+ddev exec "npm run test:smoke"  # 31 smoke tests (Playwright inside container)
+```
+
+Playwright auto-starts the dev server if nothing is on port 3000 (`reuseExistingServer: true`). The first run inside DDEV requires installing the browser once:
+```bash
+ddev exec "npx playwright install chromium --with-deps"
+```
+
+---
+
+## Screens
+
+| Route | Description |
+|---|---|
+| `/dashboard` | Overview: fixture health, upcoming matches, quick actions |
+| `/tournaments` | Tournament list |
+| `/tournaments/new` | Create tournament — name, sport, start method (empty / import / Drupal) |
+| `/tournaments/[id]` | Tournament detail — tabs for fixture, categories, clubs, data health |
+| `/import` | Import wizard step 1 — choose mode (create / update) and source |
+| `/imports` | Import history — all batches with status, source, and actions |
+| `/imports/[id]/mapping` | Step 2 — column mapping table + preview rows + validation summary |
+| `/imports/[id]/diff` | Step 3 — diff review: new clubs/cats/teams, renames, color changes, missing |
+| `/imports/[id]/errors` | Error resolution — split-panel list of ambiguous/duplicate rows |
+| `/imports/[id]/confirm` | Final confirmation + import summary stats |
+| `/fixture` | Fixture list |
+| `/fixture/[id]` | Fixture viewer |
+| `/fixture/[id]/edit` | Manual match editor |
+| `/fixture/[id]/history` | Fixture version history |
+| `/dry-run` | Dry-run list |
+| `/dry-run/[id]` | Dry-run detail — AI audit, change viewer, apply patches |
+| `/clubs` | Club list |
+| `/clubs/[id]` | Club detail |
+| `/context` | AI context dashboard |
+| `/context/organization` | Org-level context editor |
+| `/context/tournament/[id]` | Tournament context |
+| `/context/category/[id]` | Category context |
+| `/context/date` | Date context |
+| `/context/history` | Context version history |
+| `/context/compare` | Compare two context snapshots |
+| `/matches` | Match list |
+| `/audit` | AI audit log |
+| `/exports` | Data exports |
+| `/communications` | Comms / notifications |
+| `/standings/import` | Import standings from image via AI |
+| `/settings/courts` | Court management |
+| `/settings/organization` | Org settings |
+| `/settings/users` | User management |
+
+---
+
+## Import sources
+
+The import wizard (`/import`) supports four sources:
+
+| Source | How it works |
+|---|---|
+| **Excel** (.xlsx / .xls) | Parsed server-side with ExcelJS; auto-detects Club / Equipo / Categoría / Color columns |
+| **CSV** | RFC 4180 parser; same column aliases as Excel |
+| **Image / screenshot** | Uploaded image sent to OpenAI GPT-4o vision; returns per-row confidence scores |
+| **Drupal JSON:API** | Fetches from a JSON:API endpoint; maps `field_club`, `title`, `field_category` |
+
+All sources produce a unified `ImportPreview` shape. The wizard then:
+1. Shows a column-mapping table (non-image) or confidence-annotated preview (image)
+2. Computes a **diff** against the existing tournament data (update mode) — new clubs, new categories, new teams, renames, color changes, missing teams, duplicates, ambiguous matches
+3. Lets you decide per-row (keep / rename / retire / ignore)
+4. Resolves ambiguous rows in a dedicated error-resolution panel
+5. Confirms — upserts clubs, categories, teams; applies diff decisions; records to audit log
 
 ---
 
@@ -205,24 +275,48 @@ npm run test:e2e:ui
 
 ```
 app/
-  (auth)/          # Login page (unauthenticated)
-  (app)/           # All authenticated app pages
+  (auth)/login/        # Login page (unauthenticated)
+  (app)/               # All authenticated app pages
     dashboard/
     tournaments/
-    categories/
-    teams/
-    context/       # AI context management (org, tournament, category, date)
-    dry-run/       # Fixture review & approval
-    fixture/       # Fixture viewer (Phase 5+)
+    import/            # Import wizard step 1
+    imports/[id]/      # Wizard steps 2–4: mapping, diff, errors, confirm
+    fixture/[id]/
+    dry-run/[id]/
+    clubs/[id]/
+    context/
+    matches/
+    audit/
+    exports/
+    communications/
+    standings/
+    settings/
+  api/                 # API routes
+    tournaments/       # CRUD
+    imports/           # batch + parse + mapping + diff + errors + confirm
+    imports/csv/       # CSV parse shorthand
+    imports/image/     # Image extract shorthand
+
 components/
-  ui/              # Headless Radix UI components
-  context/         # Context editor client components
-  dry-run/         # Dry run review client components
+  ui/                  # shadcn/Radix UI primitives
+  import/              # ImportWizard, MappingReview, DiffReview, ErrorResolution, WizardSteps, ConfirmButton
+  tournaments/         # CreateTournamentForm
+  dry-run/             # AuditPanel, DryRunChangesViewer, RegenerateButton
+  fixture/             # FixtureViewerClient, MatchEditor
+  layout/              # Sidebar, Topbar, Providers
+  shared/              # PageStub, shared atoms
+
 lib/
-  auth/            # NextAuth config + session helpers
-  db/              # Drizzle client, schema, seed
-  context/         # Mock context parser
-  fixture-engine/  # Slot generator, eligibility validator, scheduler, orchestrator
-drizzle/           # Migration files (auto-generated)
-tests/             # Vitest unit tests + Playwright E2E tests
+  auth/                # NextAuth config + session helpers (getSession, requireOrg)
+  db/schema/           # Drizzle schema: tournaments, clubs, categories, teams, importBatches, auditLogs …
+  imports/             # excel.ts · csv.ts · image.ts · diff.ts
+  ai/                  # standings-extractor.ts · fixture-auditor.ts · fixture-editor.ts
+  fixture-engine/      # Slot generator, eligibility validator, scheduler, orchestrator
+  context/             # Mock context parser
+
+drizzle/               # Migration SQL files (auto-generated by drizzle-kit)
+__tests__/             # Vitest unit tests (181 tests)
+tests/e2e/             # Playwright smoke + E2E tests (31 smoke tests)
+design/                # JSX design prototypes (reference only, not shipped)
+docs/                  # Feature documentation by version (v3 → v4)
 ```
