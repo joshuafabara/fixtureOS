@@ -142,26 +142,31 @@ export async function aiExtractFromTableText(
 // Then we run the same deterministic parseColumnLayout() that works perfectly
 // on Excel/CSV — giving consistent results across multiple runs.
 
-const IMAGE_GRID_PROMPT = `Eres un lector de tablas. Tu única tarea es transcribir EXACTAMENTE el contenido de esta tabla en formato JSON.
+// Column-first approach: read each column top-to-bottom independently.
+// This avoids the "skip sparse row" problem that row-first transcription has.
+const IMAGE_GRID_PROMPT = `Eres un lector de tablas deportivas. Esta tabla tiene las CATEGORÍAS como encabezados de columna y los EQUIPOS listados verticalmente bajo cada categoría.
+
+Tu tarea: extraer TODAS las columnas, una por una, de izquierda a derecha.
 
 Devuelve ÚNICAMENTE este JSON (sin markdown, sin explicación):
 {
-  "headers": ["COL1", "COL2", ...],
-  "rows": [
-    ["celda1", "celda2", ...],
-    ["celda1", "celda2", ...],
+  "columns": [
+    { "header": "NOMBRE CATEGORÍA", "teams": ["EQUIPO 1", "EQUIPO 2", "EQUIPO 3"] },
+    { "header": "", "teams": ["EQUIPO A", "EQUIPO B"] },
     ...
   ]
 }
 
-Reglas ABSOLUTAS:
-1. headers = primera fila de la tabla (nombres de columnas/categorías). La primera columna puede ser un índice o estar vacía — inclúyela igual como "".
-2. rows = TODAS las filas de datos, una por una, de arriba a abajo. NO omitas ninguna fila.
-3. Para cada fila, incluye UNA celda por columna. Usa "" para celdas vacías.
-4. Si una columna tiene un encabezado vacío (porque la celda superior está fusionada con la columna anterior), escribe "" en headers para esa columna — los equipos bajo esa columna siguen perteneciendo a la misma categoría.
-5. Usa el texto EXACTO de cada celda (mayúsculas, tildes, caracteres especiales).
-6. NO interpretes ni combines datos — solo transcribe lo que ves.
-7. Incluye TODAS las filas hasta la última con contenido, aunque las últimas columnas estén vacías.`;
+Instrucciones por columna:
+1. header = el texto exacto del encabezado (primera fila). Si el encabezado está vacío o fusionado desde la columna anterior, escribe "".
+2. teams = lista de TODOS los equipos en esa columna, de arriba a abajo. Lee HASTA LA ÚLTIMA FILA CON CONTENIDO. NO te detengas cuando encuentres celdas vacías intermedias — continúa leyendo hasta el fondo de la tabla.
+3. Omite las celdas vacías y los números de fila (1, 2, 3...) del primer columna.
+4. Usa el texto EXACTO de cada celda (mayúsculas, tildes, caracteres especiales).
+5. Si una columna tiene encabezado vacío tras una columna con nombre, sus equipos pertenecen a la misma categoría — inclúyela de todas formas con header "".
+
+IMPORTANTE: Esta es una tabla de un torneo con columnas bien definidas. Para cada columna, baja HASTA el final de la imagen antes de pasar a la siguiente. No asumas que una columna terminó porque las últimas filas de otras columnas están vacías.`;
+
+type ImageColumn = { header: string; teams: string[] };
 
 export async function aiTranscribeImageGrid(
   imageBase64: string,
@@ -181,18 +186,39 @@ export async function aiTranscribeImageGrid(
           role: "user",
           content: [
             { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: "high" } },
-            { type: "text", text: "Transcribe esta tabla completa, fila por fila, sin omitir ninguna celda." },
+            { type: "text", text: "Extrae todas las columnas de esta tabla de torneo, de izquierda a derecha. Para cada columna, lista TODOS los equipos hasta el final de la columna." },
           ],
         },
       ],
     });
     const raw = completion.choices[0]?.message?.content ?? "{}";
-    const data = JSON.parse(raw) as { headers?: string[]; rows?: string[][] };
-    if (!Array.isArray(data.headers) || !Array.isArray(data.rows)) return null;
-    return { headers: data.headers, rows: data.rows };
+    const data = JSON.parse(raw) as { columns?: ImageColumn[]; headers?: string[]; rows?: string[][] };
+
+    // Handle column-first format (preferred)
+    if (Array.isArray(data.columns) && data.columns.length > 0) {
+      return columnsToGrid(data.columns);
+    }
+
+    // Fallback: handle legacy row-first format
+    if (Array.isArray(data.headers) && Array.isArray(data.rows)) {
+      return { headers: data.headers, rows: data.rows };
+    }
+
+    return null;
   } catch {
     return null;
   }
+}
+
+/** Convert column-first extraction to the {headers, rows} grid format parseColumnLayout expects. */
+function columnsToGrid(columns: ImageColumn[]): { headers: string[]; rows: string[][] } {
+  const headers = columns.map((c) => c.header ?? "");
+  const maxTeams = Math.max(...columns.map((c) => c.teams.length));
+  const rows: string[][] = [];
+  for (let i = 0; i < maxTeams; i++) {
+    rows.push(columns.map((c) => c.teams[i] ?? ""));
+  }
+  return { headers, rows };
 }
 
 // ── Image extraction (public API) ─────────────────────────────────────────────
