@@ -50,6 +50,64 @@ function similarity(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
+/**
+ * For "create" mode (new tournament from scratch), there is nothing to diff against.
+ * This returns the counts of what will be created, without requiring existing data.
+ */
+export function computeCreateSummary(rows: ParsedTeamRow[]): { diff: DiffRow[]; summary: DiffSummary } {
+  const uniqueClubs = [...new Set(rows.map((r) => r.clubName))];
+  const uniqueCats = [...new Set(rows.map((r) => r.categoryName))];
+
+  const summary: DiffSummary = {
+    newclubs: uniqueClubs.length,
+    newcats: uniqueCats.length,
+    newteams: rows.length,
+    updates: 0,
+    warnings: 0,
+    impacts: 0,
+  };
+
+  // Lightweight diff rows so the review UI has something to filter/read
+  let idSeq = 0;
+  const nextId = () => `d${++idSeq}`;
+  const diff: DiffRow[] = [];
+  const seenClubs = new Set<string>();
+  const seenCats = new Set<string>();
+
+  for (const row of rows) {
+    if (!seenClubs.has(row.clubName)) {
+      seenClubs.add(row.clubName);
+      diff.push({
+        id: nextId(), type: "newclub",
+        entity: row.clubName, cat: null,
+        current: "—",
+        imported: `${row.clubName} · ${rows.filter((r) => r.clubName === row.clubName).length} equipo(s)`,
+        decisions: ["Crear Nuevo"],
+      });
+    }
+    if (!seenCats.has(row.categoryName)) {
+      seenCats.add(row.categoryName);
+      diff.push({
+        id: nextId(), type: "newcat",
+        entity: row.categoryName, cat: null,
+        current: "—",
+        imported: `${row.categoryName}${row.categoryColor ? ` · color ${row.categoryColor}` : ""}`,
+        decisions: ["Crear (inactiva)"],
+        note: "Quedará inactiva hasta definir fecha de inicio y modo de juego.",
+      });
+    }
+    diff.push({
+      id: nextId(), type: "newteam",
+      entity: row.teamName, cat: null,
+      current: "—",
+      imported: `${row.teamName} · ${row.categoryName}`,
+      decisions: ["Crear Nuevo"],
+    });
+  }
+
+  return { diff, summary };
+}
+
 export function computeDiff(
   importedRows: ParsedTeamRow[],
   existingClubs: ExistingClub[],

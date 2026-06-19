@@ -6,7 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { parseExcelBuffer } from "@/lib/imports/excel";
 import { parseCSVBuffer } from "@/lib/imports/csv";
 import { extractTeamsFromImage } from "@/lib/imports/image";
-import { computeDiff } from "@/lib/imports/diff";
+import { computeDiff, computeCreateSummary } from "@/lib/imports/diff";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession().catch(() => null);
@@ -90,12 +90,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         db.select({ id: teams.id, name: teams.name, normalizedName: teams.normalizedName, categoryId: teams.categoryId, clubId: teams.clubId, status: teams.status }).from(teams).where(eq(teams.organizationId, session.user.organizationId)),
       ]);
       diff = computeDiff(preview.rows, existingClubs, existingCats, existingTeams);
+    } else if (batch.mode === "create") {
+      diff = computeCreateSummary(preview.rows);
     }
 
     await db.update(importBatches).set({
       mappingData: { preview, warnings: preview.warnings },
       diffData: diff ?? null,
-      status: diff ? "review" : "mapping",
+      status: "mapping",
       updatedAt: new Date(),
     }).where(eq(importBatches.id, batch.id));
 

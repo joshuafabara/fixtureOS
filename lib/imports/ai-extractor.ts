@@ -41,32 +41,41 @@ Reglas críticas:
 - NO inventes equipos. Solo incluye lo visible.
 - Incluye absolutamente TODOS los equipos; es fundamental no omitir ninguno.`;
 
-const IMAGE_SYSTEM_PROMPT = `Eres un asistente que extrae datos de inscripción de equipos desde imágenes de hojas de cálculo.
+const IMAGE_SYSTEM_PROMPT = `Eres un experto en extraer datos de tablas desde imágenes de hojas de cálculo de torneos deportivos.
 
-ESTRUCTURA ESPERADA:
-- La primera fila tiene los NOMBRES DE CATEGORÍA con fondo de color.
-- Algunas categorías ocupan DOS columnas adyacentes con el mismo encabezado (p.ej. "EJECUTIVO") — combínalas en una sola categoría.
-- Las filas siguientes contienen los equipos de cada categoría (una celda = un equipo).
-- Las celdas vacías NO significan fin de categoría; continúa leyendo hasta el final de la tabla.
+ESTRUCTURA DE LA TABLA:
+- La PRIMERA FILA contiene los NOMBRES DE CATEGORÍA (con fondo de color).
+- Cada columna debajo de un encabezado lista los EQUIPOS de esa categoría (una celda = un equipo).
+- Algunas categorías ocupan DOS columnas adyacentes con el MISMO encabezado (p.ej. "EJECUTIVO") — DEBES combinar todos sus equipos en una sola categoría.
+- Las celdas vacías NO terminan la lista; la columna puede continuar teniendo equipos en filas posteriores.
+- La primera columna a veces es un índice numérico (1, 2, 3…) — IGNÓRALA, no es una categoría.
 
-Devuelve SIEMPRE JSON puro, sin markdown:
+TU TAREA: extraer CADA equipo de CADA columna, sin excepción.
+
+Proceso obligatorio para cada columna:
+1. Identifica el nombre de la categoría en la primera fila.
+2. Lee TODAS las filas de esa columna de arriba a abajo.
+3. Agrega cada celda no vacía y no numérica como un equipo.
+4. Si el encabezado está vacío o es el mismo que la columna anterior, los equipos pertenecen a la categoría anterior.
+
+Devuelve ÚNICAMENTE JSON puro (sin markdown, sin código, sin explicación):
 {
   "categories": [
     {
       "name": "NOMBRE CATEGORIA",
       "color": "#hexcolor o null",
-      "teams": ["EQUIPO 1", "EQUIPO 2"]
+      "teams": ["EQUIPO 1", "EQUIPO 2", "EQUIPO 3"]
     }
   ],
   "warnings": []
 }
 
-Reglas críticas:
-- Escanea CADA celda de CADA columna de arriba a abajo. No te saltes ninguna fila.
-- Usa el nombre exacto tal como aparece (mayúsculas, acentos).
-- color: hex del color de fondo del encabezado de la categoría.
-- NO inventes equipos. Solo lo que es visible en la imagen.
-- Incluye absolutamente TODOS los equipos; es fundamental no omitir ninguno.`;
+Reglas absolutas:
+- NUNCA omitas equipos. Contar equipos faltantes es el error más grave.
+- Si hay N categorías, el JSON debe tener exactamente N objetos en "categories".
+- Usa el texto EXACTO de cada celda (mayúsculas, tildes, caracteres especiales).
+- color: aproxima el color de fondo del encabezado en hexadecimal, o null si no hay color.
+- NO inventes equipos que no estén visibles en la imagen.`;
 
 const CANONICALIZE_SYSTEM_PROMPT = `Eres un asistente que normaliza nombres de clubes deportivos.
 
