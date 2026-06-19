@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
+import { DeleteImportButton } from "@/components/import/delete-import-button";
 
 export const metadata = { title: "Historial de Importaciones — FixtureOS" };
 
@@ -72,7 +73,7 @@ export default async function ImportsPage() {
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <div className="min-w-[780px]">
-              <div className="grid grid-cols-[120px_1.4fr_90px_90px_160px_1.2fr_110px] px-4 py-2.5 text-[11px] font-extrabold uppercase tracking-widest text-muted-foreground border-b border-zinc-100">
+              <div className="grid grid-cols-[120px_1.4fr_90px_90px_160px_1.2fr_150px] px-4 py-2.5 text-[11px] font-extrabold uppercase tracking-widest text-muted-foreground border-b border-zinc-100">
                 <div>Fecha</div><div>Torneo</div><div>Fuente</div><div>Modo</div><div>Estado</div><div>Resumen</div><div className="text-right">Acciones</div>
               </div>
               {rows.length === 0 && (
@@ -93,7 +94,7 @@ export default async function ImportsPage() {
                   : "—";
 
                 return (
-                  <div key={r.id} className={`grid grid-cols-[120px_1.4fr_90px_90px_160px_1.2fr_110px] items-center px-4 py-3.5 ${i < rows.length - 1 ? "border-b border-zinc-100" : ""}`}>
+                  <div key={r.id} className={`grid grid-cols-[120px_1.4fr_90px_90px_160px_1.2fr_150px] items-center px-4 py-3.5 ${i < rows.length - 1 ? "border-b border-zinc-100" : ""}`}>
                     <div className="font-mono text-[12.5px] text-muted-foreground font-semibold">
                       {new Date(r.createdAt).toLocaleDateString("es-EC", { day: "2-digit", month: "short", year: "numeric" })}
                     </div>
@@ -114,13 +115,14 @@ export default async function ImportsPage() {
                       </span>
                     </div>
                     <div className="text-[12.5px] text-muted-foreground">{summaryText}</div>
-                    <div className="text-right">
+                    <div className="flex items-center justify-end gap-1">
                       <Button asChild variant={continuable ? "default" : "outline"} size="sm" className="gap-1">
                         <Link href={href}>
                           {continuable ? "Continuar" : "Ver diff"}
                           <ChevronRight className="w-3.5 h-3.5" />
                         </Link>
                       </Button>
+                      <DeleteImportButton id={r.id} />
                     </div>
                   </div>
                 );
