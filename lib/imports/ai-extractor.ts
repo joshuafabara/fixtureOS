@@ -172,6 +172,44 @@ Reglas adicionales:
 - NO inventes equipos. Solo incluye lo visible.
 - NO omitas ningún equipo de ninguna fila.`;
 
+// ── Targeted single-category extraction ──────────────────────────────────────
+
+async function extractTargetedColumn(
+  client: OpenAI,
+  imageBase64: string,
+  mimeType: string,
+  categoryName: string,
+  hint: string,
+): Promise<string[]> {
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: 'You read ONE specific column from a tournament table. Return ONLY: {"teams": ["TEAM 1", "TEAM 2", ...]}. Include every non-empty cell in that column from top to bottom.',
+        },
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: "high" as const } },
+            { type: "text", text: hint },
+          ],
+        },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content ?? "{}";
+    const data = JSON.parse(raw) as { teams?: string[] };
+    const teams = data.teams ?? [];
+    console.log(`[image-targeted] ${categoryName}: ${teams.length} teams`);
+    return teams;
+  } catch {
+    return [];
+  }
+}
+
 // ── Image extraction (public API) ─────────────────────────────────────────────
 
 export async function aiExtractFromImage(
@@ -184,9 +222,13 @@ export async function aiExtractFromImage(
   }
 
   const client = openaiClient();
+  const imageUrl = `data:${mimeType};base64,${imageBase64}`;
   const userMsg = userInstructions
     ? `Extrae todos los equipos y categorías. Instrucciones adicionales: ${userInstructions}`
     : "Extrae TODOS los equipos y categorías de esta tabla. Incluye categorías con celdas fusionadas como una sola entrada y lee hasta la última fila.";
+
+  let categories: AICategoryResult[] = [];
+  const warnings: string[] = [];
 
   try {
     const completion = await client.chat.completions.create({
@@ -198,7 +240,7 @@ export async function aiExtractFromImage(
         {
           role: "user",
           content: [
-            { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: "high" } },
+            { type: "image_url", image_url: { url: imageUrl, detail: "high" } },
             { type: "text", text: userMsg },
           ],
         },
@@ -207,12 +249,61 @@ export async function aiExtractFromImage(
     const raw = completion.choices[0]?.message?.content ?? "{}";
     console.log("[image-extract] raw:", raw.slice(0, 400));
     const data = JSON.parse(raw) as AIExtractionResult;
-    const result = { categories: data.categories ?? [], warnings: data.warnings ?? [] };
-    console.log("[image-extract] categories:", result.categories.map(c => `${c.name}:${c.teams.length}`).join(", "));
-    return result;
+    categories = data.categories ?? [];
+    warnings.push(...(data.warnings ?? []));
+    console.log("[image-extract] categories:", categories.map(c => `${c.name}:${c.teams.length}`).join(", "));
   } catch (e) {
     return { categories: [], warnings: [`Error al procesar imagen: ${e instanceof Error ? e.message : "desconocido"}`] };
   }
+
+  // ── Targeted recovery for merged-cell categories ──────────────────────────
+  //
+  // GPT-4o consistently mis-reads EJECUTIVO's merged header as two separate
+  // categories: it puts EJECUTIVO col-2 teams under "SENIOR MASCULINO" and
+  // drops the real SENIOR MASCULINO entirely. Detect this and fix it with two
+  // targeted follow-up calls, each focused on a single section of the image.
+
+  const ejecutivoIdx = categories.findIndex((c) => c.name.toUpperCase().includes("EJECUTIVO"));
+  const seniorMIdx   = categories.findIndex((c) => c.name.toUpperCase().includes("SENIOR MASCULINO") || c.name.toUpperCase().includes("SENIOR M"));
+
+  const ejecutivoCat  = ejecutivoIdx >= 0 ? categories[ejecutivoIdx] : null;
+  const seniorMCat    = seniorMIdx   >= 0 ? categories[seniorMIdx]   : null;
+
+  // Heuristic: if EJECUTIVO got ≤ 10 teams it likely missed the second column.
+  // SENIOR MASCULINO with 7+ teams is a sign it received EJECUTIVO col-2 teams
+  // instead of the real ones (which are typically 6).
+  const ejecutivoUndercount = (ejecutivoCat?.teams.length ?? 0) <= 10;
+  const seniorMOvercount    = (seniorMCat?.teams.length ?? 0) >= 7;
+
+  if (ejecutivoUndercount) {
+    const ejTeams = await extractTargetedColumn(
+      client, imageBase64, mimeType, "EJECUTIVO",
+      'Find the section labeled "EJECUTIVO" in this tournament table. ' +
+      'Its header is a MERGED CELL spanning exactly TWO adjacent columns (both are the same blue color). ' +
+      'Read ALL teams from BOTH columns from top to bottom. ' +
+      'Do NOT stop at the first column — the second column also has teams under the same EJECUTIVO header.',
+    );
+    if (ejTeams.length > (ejecutivoCat?.teams.length ?? 0)) {
+      if (ejecutivoIdx >= 0) categories[ejecutivoIdx] = { ...categories[ejecutivoIdx]!, teams: ejTeams };
+      else categories.push({ name: "EJECUTIVO", color: null, teams: ejTeams });
+    }
+  }
+
+  if (seniorMOvercount || (ejecutivoUndercount && seniorMCat)) {
+    const smTeams = await extractTargetedColumn(
+      client, imageBase64, mimeType, "SENIOR MASCULINO",
+      'Find the column labeled "SENIOR MASCULINO" in this tournament table. ' +
+      'It is the SECOND-TO-LAST column (second from the right). ' +
+      'List every team name in that column from top to bottom.',
+    );
+    if (smTeams.length > 0 && smTeams.length <= 8) {
+      if (seniorMIdx >= 0) categories[seniorMIdx] = { ...categories[seniorMIdx]!, teams: smTeams };
+      else categories.push({ name: "SENIOR MASCULINO", color: null, teams: smTeams });
+    }
+  }
+
+  console.log("[image-extract] final:", categories.map(c => `${c.name}:${c.teams.length}`).join(", "));
+  return { categories, warnings };
 }
 
 // Keep export for tests that reference it (returns null — grid path removed)
