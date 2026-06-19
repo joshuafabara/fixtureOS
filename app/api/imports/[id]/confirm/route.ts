@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import { importBatches, clubs, categories, teams, auditLogs } from "@/lib/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import type { ParsedTeamRow } from "@/lib/imports/excel";
 import type { DiffRow } from "@/lib/imports/diff";
+import { pickColors } from "@/lib/imports/category-colors";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession().catch(() => null);
@@ -95,6 +96,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       status: "active",
     });
     stats.teamsCreated++;
+  }
+
+  // Ensure every category in this tournament has a unique color
+  const allTournamentCats = await db
+    .select({ id: categories.id, colorHex: categories.colorHex })
+    .from(categories)
+    .where(and(eq(categories.organizationId, orgId), eq(categories.tournamentId, tournamentId)));
+
+  const uncolored = allTournamentCats.filter((c) => !c.colorHex);
+  if (uncolored.length > 0) {
+    const usedHere = allTournamentCats.filter((c) => c.colorHex).map((c) => c.colorHex!);
+
+    // Best-effort: prefer colors not already used in other org tournaments
+    const otherOrgCats = await db
+      .select({ colorHex: categories.colorHex })
+      .from(categories)
+      .where(and(eq(categories.organizationId, orgId), ne(categories.tournamentId, tournamentId)));
+    const usedElsewhere = otherOrgCats.filter((c) => c.colorHex).map((c) => c.colorHex!);
+
+    const colors = pickColors(usedHere, usedElsewhere, uncolored.length);
+    for (let i = 0; i < uncolored.length; i++) {
+      await db.update(categories).set({ colorHex: colors[i] }).where(eq(categories.id, uncolored[i].id));
+    }
   }
 
   await db.update(importBatches).set({ status: "confirmed", summary: stats, updatedAt: new Date() }).where(eq(importBatches.id, batch.id));
