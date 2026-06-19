@@ -142,31 +142,44 @@ export async function aiExtractFromTableText(
 // Then we run the same deterministic parseColumnLayout() that works perfectly
 // on Excel/CSV — giving consistent results across multiple runs.
 
-// Column-first approach: read each column top-to-bottom independently.
-// This avoids the "skip sparse row" problem that row-first transcription has.
-const IMAGE_GRID_PROMPT = `Eres un lector de tablas deportivas. Esta tabla tiene las CATEGORÍAS como encabezados de columna y los EQUIPOS listados verticalmente bajo cada categoría.
+// Two-step approach:
+// Step 1 — ask model to count teams per column (forces a careful visual scan)
+// Step 2 — ask model to list teams per column using counts as constraints
+// This prevents early stopping and merged-cell confusion.
+const IMAGE_GRID_COUNT_PROMPT = `Eres un asistente de conteo visual. Mira esta tabla de torneo.
 
-Tu tarea: extraer TODAS las columnas, una por una, de izquierda a derecha.
+TAREA ÚNICA: para cada columna con un encabezado de categoría, cuenta cuántas celdas NO VACÍAS hay debajo del encabezado.
 
-Devuelve ÚNICAMENTE este JSON (sin markdown, sin explicación):
+REGLAS:
+- La primera columna es un índice numérico (1, 2, 3...) — IGNÓRALA.
+- Si una columna tiene un encabezado FUSIONADO con la columna de su izquierda (celda fusionada), escribe el MISMO nombre de categoría para ambas columnas.
+- Cuenta HASTA LA ÚLTIMA FILA, aunque la mayoría de columnas ya estén vacías en las filas inferiores.
+
+Devuelve ÚNICAMENTE este JSON:
 {
   "columns": [
-    { "header": "NOMBRE CATEGORÍA", "teams": ["EQUIPO 1", "EQUIPO 2", "EQUIPO 3"] },
-    { "header": "", "teams": ["EQUIPO A", "EQUIPO B"] },
-    ...
+    { "header": "NOMBRE CATEGORÍA", "count": N }
+  ]
+}`;
+
+const IMAGE_GRID_EXTRACT_PROMPT = `Eres un asistente de extracción de tablas. Se te proporcionan los encabezados y conteos exactos de cada columna de una tabla de torneo.
+
+Tu tarea: leer los equipos de cada columna, respetando EXACTAMENTE el conteo proporcionado.
+
+Devuelve ÚNICAMENTE este JSON:
+{
+  "columns": [
+    { "header": "NOMBRE CATEGORÍA", "teams": ["EQUIPO 1", "EQUIPO 2", ...] }
   ]
 }
 
-Instrucciones por columna:
-1. header = el texto exacto del encabezado (primera fila). Si el encabezado está vacío o fusionado desde la columna anterior, escribe "".
-2. teams = lista de TODOS los equipos en esa columna, de arriba a abajo. Lee HASTA LA ÚLTIMA FILA CON CONTENIDO. NO te detengas cuando encuentres celdas vacías intermedias — continúa leyendo hasta el fondo de la tabla.
-3. Omite las celdas vacías y los números de fila (1, 2, 3...) del primer columna.
-4. Usa el texto EXACTO de cada celda (mayúsculas, tildes, caracteres especiales).
-5. Si una columna tiene encabezado vacío tras una columna con nombre, sus equipos pertenecen a la misma categoría — inclúyela de todas formas con header "".
+REGLAS:
+- Para cada columna, el array "teams" debe tener EXACTAMENTE el número de elementos indicado en el conteo.
+- Lee de arriba hacia abajo en esa columna. Si una columna tiene count=8, debes encontrar exactamente 8 equipos (los de las filas inferiores a veces son difíciles de ver — mira con cuidado hasta el fondo).
+- Usa el texto EXACTO de cada celda (mayúsculas, tildes, acentos).
+- Si una categoría aparece DOS VECES en los encabezados (celda fusionada), incluye ambas columnas con el mismo nombre de categoría.`;
 
-IMPORTANTE: Esta es una tabla de un torneo con columnas bien definidas. Para cada columna, baja HASTA el final de la imagen antes de pasar a la siguiente. No asumas que una columna terminó porque las últimas filas de otras columnas están vacías.`;
-
-type ImageColumn = { header: string; teams: string[] };
+type ImageColumn = { header: string; teams?: string[]; count?: number };
 
 export async function aiTranscribeImageGrid(
   imageBase64: string,
@@ -175,45 +188,70 @@ export async function aiTranscribeImageGrid(
   if (!process.env.OPENAI_API_KEY) return null;
 
   const client = openaiClient();
+  const imageContent = { type: "image_url" as const, image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: "high" as const } };
+
   try {
-    const completion = await client.chat.completions.create({
+    // Step 1: count teams per column (forces the model to look at the full column depth)
+    const countCompletion = await client.chat.completions.create({
       model: "gpt-4o",
       temperature: 0,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: IMAGE_GRID_PROMPT },
+        { role: "system", content: IMAGE_GRID_COUNT_PROMPT },
+        { role: "user", content: [imageContent, { type: "text", text: "Cuenta los equipos en cada columna de esta tabla de torneo." }] },
+      ],
+    });
+    const countRaw = countCompletion.choices[0]?.message?.content ?? "{}";
+    const countData = JSON.parse(countRaw) as { columns?: ImageColumn[] };
+    const counts = countData.columns ?? [];
+    console.log("[image-grid] Step 1 counts:", JSON.stringify(counts));
+
+    if (counts.length === 0) return null;
+
+    // Build a column spec string for step 2
+    const columnSpec = counts
+      .map((c, i) => `  Columna ${i + 1}: "${c.header}" — ${c.count ?? "?"} equipos`)
+      .join("\n");
+
+    // Step 2: extract teams with exact counts as constraints
+    const extractCompletion = await client.chat.completions.create({
+      model: "gpt-4o",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: IMAGE_GRID_EXTRACT_PROMPT },
         {
           role: "user",
           content: [
-            { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: "high" } },
-            { type: "text", text: "Extrae todas las columnas de esta tabla de torneo, de izquierda a derecha. Para cada columna, lista TODOS los equipos hasta el final de la columna." },
+            imageContent,
+            {
+              type: "text",
+              text: `Esta tabla tiene las siguientes columnas con estos conteos exactos:\n${columnSpec}\n\nExtrae los equipos de cada columna respetando EXACTAMENTE esos conteos.`,
+            },
           ],
         },
       ],
     });
-    const raw = completion.choices[0]?.message?.content ?? "{}";
-    const data = JSON.parse(raw) as { columns?: ImageColumn[]; headers?: string[]; rows?: string[][] };
+    const extractRaw = extractCompletion.choices[0]?.message?.content ?? "{}";
+    const extractData = JSON.parse(extractRaw) as { columns?: ImageColumn[] };
+    const extracted = extractData.columns ?? [];
+    console.log("[image-grid] Step 2 extracted:", JSON.stringify(extracted.map(c => ({ header: c.header, count: c.teams?.length }))));
 
-    // Handle column-first format (preferred)
-    if (Array.isArray(data.columns) && data.columns.length > 0) {
-      return columnsToGrid(data.columns);
-    }
-
-    // Fallback: handle legacy row-first format
-    if (Array.isArray(data.headers) && Array.isArray(data.rows)) {
-      return { headers: data.headers, rows: data.rows };
+    if (extracted.length > 0 && extracted[0].teams !== undefined) {
+      return columnsToGrid(extracted as (ImageColumn & { teams: string[] })[]);
     }
 
     return null;
-  } catch {
+  } catch (e) {
+    console.error("[image-grid] error:", e);
     return null;
   }
 }
 
 /** Convert column-first extraction to the {headers, rows} grid format parseColumnLayout expects. */
-function columnsToGrid(columns: ImageColumn[]): { headers: string[]; rows: string[][] } {
+function columnsToGrid(columns: (ImageColumn & { teams: string[] })[]): { headers: string[]; rows: string[][] } {
   const headers = columns.map((c) => c.header ?? "");
-  const maxTeams = Math.max(...columns.map((c) => c.teams.length));
+  const maxTeams = Math.max(0, ...columns.map((c) => c.teams.length));
   const rows: string[][] = [];
   for (let i = 0; i < maxTeams; i++) {
     rows.push(columns.map((c) => c.teams[i] ?? ""));
