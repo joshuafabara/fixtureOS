@@ -36,3 +36,6 @@ yarn-error.log*
 
 # debug
 *.log
+
+# Test fixture images (place tournament-table.png here)
+__tests__/fixtures/

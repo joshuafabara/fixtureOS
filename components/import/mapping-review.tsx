@@ -149,7 +149,7 @@ export function MappingReview({ batchId, sourceType, preview, extractedRows, war
   const router = useRouter();
   const isImage = sourceType === "image";
   const [cols, setCols] = useState<Column[]>(() => mapPreviewToColumns(preview));
-  const [previewTab, setPreviewTab] = useState<"category" | "club">("category");
+  const [previewTab, setPreviewTab] = useState<"category" | "club" | "confidence">("category");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -232,32 +232,40 @@ export function MappingReview({ batchId, sourceType, preview, extractedRows, war
           <div className="flex items-center gap-3">
             <CardTitle className="flex items-center gap-2 text-base flex-1">
               <Eye className="w-4 h-4 text-blue-500" />
-              {isImage ? "Datos extraídos" : "Vista previa"}
+              Vista previa
             </CardTitle>
-            {!isImage && (
-              <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-100">
+            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-100">
+              <button
+                type="button"
+                onClick={() => setPreviewTab("category")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-bold transition-all ${previewTab === "category" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                Por Categoría
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewTab("club")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-bold transition-all ${previewTab === "club" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                Por Club
+              </button>
+              {isImage && extractedRows && extractedRows.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => setPreviewTab("category")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-bold transition-all ${previewTab === "category" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => setPreviewTab("confidence")}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-bold transition-all ${previewTab === "confidence" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                  Por Categoría
+                  <List className="w-3.5 h-3.5" />
+                  Confianza
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewTab("club")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-bold transition-all ${previewTab === "club" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  Por Club
-                </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {isImage ? (
+          {previewTab === "confidence" && isImage ? (
             <div className="overflow-x-auto">
               <ImageRowsView extractedRows={extractedRows ?? []} />
             </div>
