@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { WizardSteps } from "./wizard-steps";
 import {
   Upload, List, Eye, ExternalLink, GitCompare, RefreshCw,
-  ChevronLeft, ChevronRight, Loader2, CheckCircle2, X,
+  ChevronLeft, ChevronRight, Loader2, CheckCircle2, X, Trophy,
 } from "lucide-react";
 
 type SourceId = "excel" | "csv" | "image" | "drupal";
@@ -21,6 +21,7 @@ type Props = {
   defaultMode?: ModeId;
   defaultSource?: SourceId;
   defaultTournamentId?: string;
+  defaultTournamentName?: string;
 };
 
 const SOURCES: { id: SourceId; Icon: React.ElementType; label: string; hint: string; accept: string }[] = [
@@ -37,14 +38,14 @@ const IMG_PROMPT_CHIPS = [
   "Ignora los equipos tachados.",
 ];
 
-export function ImportWizard({ tournaments, defaultMode = "update", defaultSource = "excel", defaultTournamentId }: Props) {
+export function ImportWizard({ tournaments, defaultMode = "update", defaultSource = "excel", defaultTournamentId, defaultTournamentName }: Props) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [mode, setMode] = useState<ModeId>(defaultMode);
   const [source, setSource] = useState<SourceId>(defaultSource);
   const [targetId, setTargetId] = useState(defaultTournamentId ?? tournaments[0]?.id ?? "");
-  const [newTournamentName, setNewTournamentName] = useState("");
+  const [newTournamentName, setNewTournamentName] = useState(defaultTournamentName ?? "");
   const [file, setFile] = useState<File | null>(null);
   const [endpoint, setEndpoint] = useState("https://liga.example.org/jsonapi");
   const [prompt, setPrompt] = useState("");
@@ -65,17 +66,22 @@ export function ImportWizard({ tournaments, defaultMode = "update", defaultSourc
     setError("");
 
     try {
-      // 0. For create mode, create the tournament first
+      // 0. For create mode, use pre-created tournament (from /tournaments/new) or create a new one
       let tournamentId: string | null = null;
       if (mode === "create") {
-        const tRes = await fetch("/api/tournaments", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: newTournamentName.trim() }),
-        });
-        if (!tRes.ok) throw new Error("Error al crear el torneo");
-        const t = await tRes.json() as { id: string };
-        tournamentId = t.id;
+        if (defaultTournamentId) {
+          // Tournament was already created by the /tournaments/new flow — use it directly
+          tournamentId = defaultTournamentId;
+        } else {
+          const tRes = await fetch("/api/tournaments", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: newTournamentName.trim() }),
+          });
+          if (!tRes.ok) throw new Error("Error al crear el torneo");
+          const t = await tRes.json() as { id: string };
+          tournamentId = t.id;
+        }
       }
 
       // 1. Create batch
@@ -147,12 +153,20 @@ export function ImportWizard({ tournaments, defaultMode = "update", defaultSourc
           {mode === "create" && (
             <div className="sm:col-span-2">
               <Label className="mb-1.5 block text-xs font-bold text-muted-foreground uppercase tracking-wide">Nombre del torneo</Label>
-              <Input
-                value={newTournamentName}
-                onChange={(e) => setNewTournamentName(e.target.value)}
-                placeholder="ej. Copa Alpha 2026"
-                className="font-semibold"
-              />
+              {defaultTournamentId ? (
+                // Tournament was pre-created in /tournaments/new — show name as read-only
+                <div className="flex items-center gap-2 h-10 px-3 rounded-md border border-input bg-muted/30 text-sm font-semibold text-foreground">
+                  <Trophy className="w-4 h-4 text-primary shrink-0" />
+                  {newTournamentName}
+                </div>
+              ) : (
+                <Input
+                  value={newTournamentName}
+                  onChange={(e) => setNewTournamentName(e.target.value)}
+                  placeholder="ej. Copa Alpha 2026"
+                  className="font-semibold"
+                />
+              )}
             </div>
           )}
           {mode === "update" && (

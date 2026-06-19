@@ -19,6 +19,11 @@ export default async function ImportPage({ searchParams }: { searchParams: { mod
   const mode = (searchParams.mode === "create" ? "create" : "update") as "create" | "update";
   const source = (["excel", "csv", "image", "drupal"].includes(searchParams.source ?? "") ? searchParams.source : "excel") as "excel" | "csv" | "image" | "drupal";
 
+  // If a tournamentId was passed (e.g. from /tournaments/new), look up its name so the wizard can pre-fill it
+  const preCreatedTournament = searchParams.tournamentId
+    ? tournamentList.find((t) => t.id === searchParams.tournamentId) ?? null
+    : null;
+
   return (
     <div className="p-6">
       <div className="flex items-center gap-3 mb-6">
@@ -36,6 +41,7 @@ export default async function ImportPage({ searchParams }: { searchParams: { mod
         defaultMode={mode}
         defaultSource={source}
         defaultTournamentId={searchParams.tournamentId}
+        defaultTournamentName={preCreatedTournament?.name}
       />
     </div>
   );

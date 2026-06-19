@@ -43,6 +43,12 @@ export function CreateTournamentForm() {
       });
       if (!res.ok) throw new Error("Error al crear torneo");
       const tournament = await res.json() as { id: string };
+      // Set as active tournament so the header updates immediately
+      await fetch("/api/active-tournament", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tournamentId: tournament.id }),
+      });
       if (then === "import") {
         router.push(`/import?tournamentId=${tournament.id}&mode=create&source=${startMethod === "drupal" ? "drupal" : "excel"}`);
       } else {
