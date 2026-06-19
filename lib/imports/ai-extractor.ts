@@ -135,129 +135,42 @@ export async function aiExtractFromTableText(
   }
 }
 
-// ── Image → raw grid transcription ───────────────────────────────────────────
+// ── Image → category extraction ──────────────────────────────────────────────
 //
-// Instead of asking the AI to extract categories directly (which loses rows),
-// we ask it to transcribe the table into a raw grid (headers + rows).
-// Then we run the same deterministic parseColumnLayout() that works perfectly
-// on Excel/CSV — giving consistent results across multiple runs.
+// Direct single-step extraction from image to categories.
+// Grid-based and count-based approaches were tried and produced worse results
+// (57/78 teams) because GPT-4o counts cells unreliably — wrong counts in step 1
+// then constrain step 2 to extract fewer teams than actually exist.
+// This single-step approach with explicit structural hints gives the best results.
 
-// Two-step approach:
-// Step 1 — ask model to count teams per column (forces a careful visual scan)
-// Step 2 — ask model to list teams per column using counts as constraints
-// This prevents early stopping and merged-cell confusion.
-const IMAGE_GRID_COUNT_PROMPT = `Eres un asistente de conteo visual. Mira esta tabla de torneo.
+const IMAGE_EXTRACT_PROMPT = `Eres un experto en leer tablas de inscripción de equipos deportivos desde imágenes.
 
-TAREA ÚNICA: para cada columna con un encabezado de categoría, cuenta cuántas celdas NO VACÍAS hay debajo del encabezado.
+ESTRUCTURA DE LA TABLA:
+- La PRIMERA FILA tiene los NOMBRES DE CATEGORÍA como encabezados de columna.
+- Cada columna debajo del encabezado lista los EQUIPOS de esa categoría.
+- La primera columna puede ser un índice numérico (1,2,3…) — IGNÓRALA.
 
-REGLAS:
-- La primera columna es un índice numérico (1, 2, 3...) — IGNÓRALA.
-- Si una columna tiene un encabezado FUSIONADO con la columna de su izquierda (celda fusionada), escribe el MISMO nombre de categoría para ambas columnas.
-- Cuenta HASTA LA ÚLTIMA FILA, aunque la mayoría de columnas ya estén vacías en las filas inferiores.
+REGLA CRÍTICA SOBRE CELDAS FUSIONADAS:
+Una o más categorías pueden tener su encabezado FUSIONADO sobre DOS columnas adyacentes.
+Cuando veas dos columnas adyacentes donde solo la izquierda tiene nombre visible y la derecha parece sin encabezado — sus equipos son de la MISMA categoría. Combínalos todos en UNA entrada.
+Ejemplo: "EJECUTIVO" fusionado sobre 2 columnas → una sola categoría "EJECUTIVO" con TODOS los equipos de ambas columnas.
 
-Devuelve ÚNICAMENTE este JSON:
+REGLA CRÍTICA SOBRE FILAS INFERIORES:
+La tabla tiene equipos hasta la ÚLTIMA FILA. En las filas inferiores (7, 8, 9…) algunas columnas están vacías pero OTRAS tienen equipos. Lee TODAS las filas hasta el final de la imagen — NO te detengas antes.
+
+Devuelve ÚNICAMENTE JSON (sin markdown):
 {
-  "columns": [
-    { "header": "NOMBRE CATEGORÍA", "count": N }
-  ]
-}`;
-
-const IMAGE_GRID_EXTRACT_PROMPT = `Eres un asistente de extracción de tablas. Se te proporcionan los encabezados y conteos exactos de cada columna de una tabla de torneo.
-
-Tu tarea: leer los equipos de cada columna, respetando EXACTAMENTE el conteo proporcionado.
-
-Devuelve ÚNICAMENTE este JSON:
-{
-  "columns": [
-    { "header": "NOMBRE CATEGORÍA", "teams": ["EQUIPO 1", "EQUIPO 2", ...] }
-  ]
+  "categories": [
+    { "name": "NOMBRE CATEGORIA", "color": "#hexcolor o null", "teams": ["EQUIPO 1", "EQUIPO 2"] }
+  ],
+  "warnings": []
 }
 
-REGLAS:
-- Para cada columna, el array "teams" debe tener EXACTAMENTE el número de elementos indicado en el conteo.
-- Lee de arriba hacia abajo en esa columna. Si una columna tiene count=8, debes encontrar exactamente 8 equipos (los de las filas inferiores a veces son difíciles de ver — mira con cuidado hasta el fondo).
-- Usa el texto EXACTO de cada celda (mayúsculas, tildes, acentos).
-- Si una categoría aparece DOS VECES en los encabezados (celda fusionada), incluye ambas columnas con el mismo nombre de categoría.`;
-
-type ImageColumn = { header: string; teams?: string[]; count?: number };
-
-export async function aiTranscribeImageGrid(
-  imageBase64: string,
-  mimeType: string,
-): Promise<{ headers: string[]; rows: string[][] } | null> {
-  if (!process.env.OPENAI_API_KEY) return null;
-
-  const client = openaiClient();
-  const imageContent = { type: "image_url" as const, image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: "high" as const } };
-
-  try {
-    // Step 1: count teams per column (forces the model to look at the full column depth)
-    const countCompletion = await client.chat.completions.create({
-      model: "gpt-4o",
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: IMAGE_GRID_COUNT_PROMPT },
-        { role: "user", content: [imageContent, { type: "text", text: "Cuenta los equipos en cada columna de esta tabla de torneo." }] },
-      ],
-    });
-    const countRaw = countCompletion.choices[0]?.message?.content ?? "{}";
-    const countData = JSON.parse(countRaw) as { columns?: ImageColumn[] };
-    const counts = countData.columns ?? [];
-    console.log("[image-grid] Step 1 counts:", JSON.stringify(counts));
-
-    if (counts.length === 0) return null;
-
-    // Build a column spec string for step 2
-    const columnSpec = counts
-      .map((c, i) => `  Columna ${i + 1}: "${c.header}" — ${c.count ?? "?"} equipos`)
-      .join("\n");
-
-    // Step 2: extract teams with exact counts as constraints
-    const extractCompletion = await client.chat.completions.create({
-      model: "gpt-4o",
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: IMAGE_GRID_EXTRACT_PROMPT },
-        {
-          role: "user",
-          content: [
-            imageContent,
-            {
-              type: "text",
-              text: `Esta tabla tiene las siguientes columnas con estos conteos exactos:\n${columnSpec}\n\nExtrae los equipos de cada columna respetando EXACTAMENTE esos conteos.`,
-            },
-          ],
-        },
-      ],
-    });
-    const extractRaw = extractCompletion.choices[0]?.message?.content ?? "{}";
-    const extractData = JSON.parse(extractRaw) as { columns?: ImageColumn[] };
-    const extracted = extractData.columns ?? [];
-    console.log("[image-grid] Step 2 extracted:", JSON.stringify(extracted.map(c => ({ header: c.header, count: c.teams?.length }))));
-
-    if (extracted.length > 0 && extracted[0].teams !== undefined) {
-      return columnsToGrid(extracted as (ImageColumn & { teams: string[] })[]);
-    }
-
-    return null;
-  } catch (e) {
-    console.error("[image-grid] error:", e);
-    return null;
-  }
-}
-
-/** Convert column-first extraction to the {headers, rows} grid format parseColumnLayout expects. */
-function columnsToGrid(columns: (ImageColumn & { teams: string[] })[]): { headers: string[]; rows: string[][] } {
-  const headers = columns.map((c) => c.header ?? "");
-  const maxTeams = Math.max(0, ...columns.map((c) => c.teams.length));
-  const rows: string[][] = [];
-  for (let i = 0; i < maxTeams; i++) {
-    rows.push(columns.map((c) => c.teams[i] ?? ""));
-  }
-  return { headers, rows };
-}
+Reglas adicionales:
+- Usa el texto EXACTO de cada celda.
+- color: aproxima el color de fondo del encabezado en hex, o null.
+- NO inventes equipos. Solo incluye lo visible.
+- NO omitas ningún equipo de ninguna fila.`;
 
 // ── Image extraction (public API) ─────────────────────────────────────────────
 
@@ -270,34 +183,10 @@ export async function aiExtractFromImage(
     return { categories: [], warnings: ["OPENAI_API_KEY no configurado."] };
   }
 
-  // Phase 1: transcribe the raw grid
-  const grid = await aiTranscribeImageGrid(imageBase64, mimeType);
-
-  if (grid) {
-    // Phase 2: run the same deterministic column-layout parser as Excel/CSV
-    const { isColumnLayout, parseColumnLayout } = await import("./column-layout");
-    const fullGrid = [grid.headers, ...grid.rows];
-    if (isColumnLayout(fullGrid)) {
-      const { rows, warnings } = parseColumnLayout(fullGrid);
-      const catMap = new Map<string, string[]>();
-      for (const r of rows) {
-        if (!catMap.has(r.categoryName)) catMap.set(r.categoryName, []);
-        catMap.get(r.categoryName)!.push(r.teamName);
-      }
-      const categories: AIExtractionResult["categories"] = [...catMap.entries()].map(([name, teams]) => ({
-        name,
-        color: null,
-        teams,
-      }));
-      return { categories, warnings };
-    }
-  }
-
-  // Fallback: direct AI extraction (legacy path for non-column-layout images)
   const client = openaiClient();
   const userMsg = userInstructions
     ? `Extrae todos los equipos y categorías. Instrucciones adicionales: ${userInstructions}`
-    : "Extrae todos los equipos y categorías de esta imagen de tabla de inscripciones.";
+    : "Extrae TODOS los equipos y categorías de esta tabla. Incluye categorías con celdas fusionadas como una sola entrada y lee hasta la última fila.";
 
   try {
     const completion = await client.chat.completions.create({
@@ -305,7 +194,7 @@ export async function aiExtractFromImage(
       temperature: 0,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: IMAGE_SYSTEM_PROMPT },
+        { role: "system", content: IMAGE_EXTRACT_PROMPT },
         {
           role: "user",
           content: [
@@ -316,11 +205,22 @@ export async function aiExtractFromImage(
       ],
     });
     const raw = completion.choices[0]?.message?.content ?? "{}";
+    console.log("[image-extract] raw:", raw.slice(0, 400));
     const data = JSON.parse(raw) as AIExtractionResult;
-    return { categories: data.categories ?? [], warnings: data.warnings ?? [] };
+    const result = { categories: data.categories ?? [], warnings: data.warnings ?? [] };
+    console.log("[image-extract] categories:", result.categories.map(c => `${c.name}:${c.teams.length}`).join(", "));
+    return result;
   } catch (e) {
     return { categories: [], warnings: [`Error al procesar imagen: ${e instanceof Error ? e.message : "desconocido"}`] };
   }
+}
+
+// Keep export for tests that reference it (returns null — grid path removed)
+export async function aiTranscribeImageGrid(
+  _imageBase64: string,
+  _mimeType: string,
+): Promise<{ headers: string[]; rows: string[][] } | null> {
+  return null;
 }
 
 // ── Club name canonicalization ────────────────────────────────────────────────
