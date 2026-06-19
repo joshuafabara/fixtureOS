@@ -44,6 +44,7 @@ export function ImportWizard({ tournaments, defaultMode = "update", defaultSourc
   const [mode, setMode] = useState<ModeId>(defaultMode);
   const [source, setSource] = useState<SourceId>(defaultSource);
   const [targetId, setTargetId] = useState(defaultTournamentId ?? tournaments[0]?.id ?? "");
+  const [newTournamentName, setNewTournamentName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [endpoint, setEndpoint] = useState("https://liga.example.org/jsonapi");
   const [prompt, setPrompt] = useState("");
@@ -57,15 +58,31 @@ export function ImportWizard({ tournaments, defaultMode = "update", defaultSourc
     if (source === "drupal" && !endpoint.trim()) {
       setError("Ingresa el endpoint JSON:API."); return;
     }
+    if (mode === "create" && !newTournamentName.trim()) {
+      setError("Ingresa un nombre para el nuevo torneo."); return;
+    }
     setLoading(true);
     setError("");
 
     try {
+      // 0. For create mode, create the tournament first
+      let tournamentId: string | null = null;
+      if (mode === "create") {
+        const tRes = await fetch("/api/tournaments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: newTournamentName.trim() }),
+        });
+        if (!tRes.ok) throw new Error("Error al crear el torneo");
+        const t = await tRes.json() as { id: string };
+        tournamentId = t.id;
+      }
+
       // 1. Create batch
       const batchRes = await fetch("/api/imports/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceType: source, mode, tournamentId: mode === "update" ? targetId : null }),
+        body: JSON.stringify({ sourceType: source, mode, tournamentId: mode === "update" ? targetId : tournamentId }),
       });
       if (!batchRes.ok) throw new Error("Error al crear importación");
       const batch = await batchRes.json() as { id: string };
@@ -127,6 +144,17 @@ export function ImportWizard({ tournaments, defaultMode = "update", defaultSourc
               </button>
             );
           })}
+          {mode === "create" && (
+            <div className="sm:col-span-2">
+              <Label className="mb-1.5 block text-xs font-bold text-muted-foreground uppercase tracking-wide">Nombre del torneo</Label>
+              <Input
+                value={newTournamentName}
+                onChange={(e) => setNewTournamentName(e.target.value)}
+                placeholder="ej. Copa Alpha 2026"
+                className="font-semibold"
+              />
+            </div>
+          )}
           {mode === "update" && (
             <div className="sm:col-span-2">
               <Label className="mb-1.5 block text-xs font-bold text-muted-foreground uppercase tracking-wide">Torneo destino</Label>

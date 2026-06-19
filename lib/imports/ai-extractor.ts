@@ -135,7 +135,67 @@ export async function aiExtractFromTableText(
   }
 }
 
-// ── Image extraction ──────────────────────────────────────────────────────────
+// ── Image → raw grid transcription ───────────────────────────────────────────
+//
+// Instead of asking the AI to extract categories directly (which loses rows),
+// we ask it to transcribe the table into a raw grid (headers + rows).
+// Then we run the same deterministic parseColumnLayout() that works perfectly
+// on Excel/CSV — giving consistent results across multiple runs.
+
+const IMAGE_GRID_PROMPT = `Eres un lector de tablas. Tu única tarea es transcribir EXACTAMENTE el contenido de esta tabla en formato JSON.
+
+Devuelve ÚNICAMENTE este JSON (sin markdown, sin explicación):
+{
+  "headers": ["COL1", "COL2", ...],
+  "rows": [
+    ["celda1", "celda2", ...],
+    ["celda1", "celda2", ...],
+    ...
+  ]
+}
+
+Reglas ABSOLUTAS:
+1. headers = primera fila de la tabla (nombres de columnas/categorías). La primera columna puede ser un índice o estar vacía — inclúyela igual como "".
+2. rows = TODAS las filas de datos, una por una, de arriba a abajo. NO omitas ninguna fila.
+3. Para cada fila, incluye UNA celda por columna. Usa "" para celdas vacías.
+4. Si una columna tiene un encabezado vacío (porque la celda superior está fusionada con la columna anterior), escribe "" en headers para esa columna — los equipos bajo esa columna siguen perteneciendo a la misma categoría.
+5. Usa el texto EXACTO de cada celda (mayúsculas, tildes, caracteres especiales).
+6. NO interpretes ni combines datos — solo transcribe lo que ves.
+7. Incluye TODAS las filas hasta la última con contenido, aunque las últimas columnas estén vacías.`;
+
+export async function aiTranscribeImageGrid(
+  imageBase64: string,
+  mimeType: string,
+): Promise<{ headers: string[]; rows: string[][] } | null> {
+  if (!process.env.OPENAI_API_KEY) return null;
+
+  const client = openaiClient();
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: IMAGE_GRID_PROMPT },
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: "high" } },
+            { type: "text", text: "Transcribe esta tabla completa, fila por fila, sin omitir ninguna celda." },
+          ],
+        },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content ?? "{}";
+    const data = JSON.parse(raw) as { headers?: string[]; rows?: string[][] };
+    if (!Array.isArray(data.headers) || !Array.isArray(data.rows)) return null;
+    return { headers: data.headers, rows: data.rows };
+  } catch {
+    return null;
+  }
+}
+
+// ── Image extraction (public API) ─────────────────────────────────────────────
 
 export async function aiExtractFromImage(
   imageBase64: string,
@@ -146,6 +206,30 @@ export async function aiExtractFromImage(
     return { categories: [], warnings: ["OPENAI_API_KEY no configurado."] };
   }
 
+  // Phase 1: transcribe the raw grid
+  const grid = await aiTranscribeImageGrid(imageBase64, mimeType);
+
+  if (grid) {
+    // Phase 2: run the same deterministic column-layout parser as Excel/CSV
+    const { isColumnLayout, parseColumnLayout } = await import("./column-layout");
+    const fullGrid = [grid.headers, ...grid.rows];
+    if (isColumnLayout(fullGrid)) {
+      const { rows, warnings } = parseColumnLayout(fullGrid);
+      const catMap = new Map<string, string[]>();
+      for (const r of rows) {
+        if (!catMap.has(r.categoryName)) catMap.set(r.categoryName, []);
+        catMap.get(r.categoryName)!.push(r.teamName);
+      }
+      const categories: AIExtractionResult["categories"] = [...catMap.entries()].map(([name, teams]) => ({
+        name,
+        color: null,
+        teams,
+      }));
+      return { categories, warnings };
+    }
+  }
+
+  // Fallback: direct AI extraction (legacy path for non-column-layout images)
   const client = openaiClient();
   const userMsg = userInstructions
     ? `Extrae todos los equipos y categorías. Instrucciones adicionales: ${userInstructions}`

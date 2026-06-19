@@ -13,8 +13,8 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
-import { aiExtractFromImage, aiResultToPreview } from "../lib/imports/ai-extractor";
-import { canonicalizeClubNames } from "../lib/imports/ai-extractor";
+import { aiExtractFromImage, aiResultToPreview, aiTranscribeImageGrid } from "../lib/imports/ai-extractor";
+import { isColumnLayout, parseColumnLayout } from "../lib/imports/column-layout";
 
 const FIXTURE_PATH = join(__dirname, "fixtures", "tournament-table.png");
 const API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -40,15 +40,38 @@ const EXPECTED_CATEGORY_NAMES = [
 describe.skipIf(!existsSync(FIXTURE_PATH) || !API_KEY)(
   "image extraction — tournament table",
   () => {
-    it("extracts exactly 11 categories and 78 teams", async () => {
+    it("grid transcription: extracts correct column headers including blank EJECUTIVO continuation", async () => {
       const buf = readFileSync(FIXTURE_PATH);
       const base64 = buf.toString("base64");
 
-      const result = await aiExtractFromImage(
-        base64,
-        "image/png",
-        "Los equipos están en una tabla por columnas. Las categorías tienen colores de fondo. El listado está en español. La primera fila es la categoría, abajo están los equipos, solo en la categoría EJECUTIVO hay dos columnas con 16 equipos en total.",
-      );
+      const grid = await aiTranscribeImageGrid(base64, "image/png");
+      expect(grid).not.toBeNull();
+
+      if (grid) {
+        console.log("Headers:", grid.headers);
+        console.log("Rows:", grid.rows.length);
+
+        // Should have EJECUTIVO and a blank continuation header
+        const ejecutivoIdx = grid.headers.findIndex((h) => h.toUpperCase().includes("EJECUTIVO"));
+        expect(ejecutivoIdx).toBeGreaterThan(-1);
+
+        // Must be parseable as column layout
+        const fullGrid = [grid.headers, ...grid.rows];
+        expect(isColumnLayout(fullGrid)).toBe(true);
+
+        const { rows } = parseColumnLayout(fullGrid);
+        expect(rows.length).toBe(EXPECTED_TEAMS);
+
+        const cats = new Set(rows.map((r) => r.categoryName));
+        expect(cats.size).toBe(EXPECTED_CATEGORIES);
+      }
+    }, 60_000);
+
+    it("aiExtractFromImage: extracts exactly 11 categories and 78 teams (grid path)", async () => {
+      const buf = readFileSync(FIXTURE_PATH);
+      const base64 = buf.toString("base64");
+
+      const result = await aiExtractFromImage(base64, "image/png");
 
       if (result.warnings.length > 0) {
         console.warn("AI warnings:", result.warnings);

@@ -87,10 +87,12 @@ export default async function ConfirmPage({ params }: { params: { id: string } }
   }
 
   const diffData = batch.diffData as Record<string, unknown> | null;
+  // Prefer the stored summary (fast); fall back to counting diff rows
+  const storedSummary = diffData?.summary as Record<string, number> | null;
   const diff = (diffData?.diff ?? []) as { type: string }[];
-  const newTeams = diff.filter((r) => r.type === "newteam").length;
-  const newCats  = diff.filter((r) => r.type === "newcat").length;
-  const newClubs = diff.filter((r) => r.type === "newclub").length;
+  const newTeams = storedSummary?.newteams ?? diff.filter((r) => r.type === "newteam").length;
+  const newCats  = storedSummary?.newcats  ?? diff.filter((r) => r.type === "newcat").length;
+  const newClubs = storedSummary?.newclubs ?? diff.filter((r) => r.type === "newclub").length;
 
   return (
     <div className="p-6 max-w-xl mx-auto">
