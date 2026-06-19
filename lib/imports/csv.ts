@@ -1,116 +1,56 @@
-import type { ImportPreview, ParsedTeamRow } from "./excel";
+import { canonicalizeClubNames, aiExtractFromTableText, aiResultToPreview } from "./ai-extractor";
+import { isColumnLayout, parseColumnLayout, rowsToPreview } from "./column-layout";
+import type { ImportPreview } from "./excel";
 
-const CLUB_ALIASES = ["club", "club name", "nombre club"];
-const TEAM_ALIASES = ["equipo", "team", "team name", "nombre equipo"];
-const CATEGORY_ALIASES = ["categoría", "categoria", "category", "cat"];
-const COLOR_ALIASES = ["color", "colour", "color hex", "hex"];
-const STATUS_ALIASES = ["estado", "status", "state"];
-
-function norm(s: string) {
-  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
-}
-
-function findCol(headers: string[], aliases: string[]): number {
-  return headers.findIndex((h) => aliases.includes(norm(h)));
-}
-
-// RFC 4180-compatible CSV parser (handles quoted fields with embedded commas/newlines)
-function parseCSV(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let inQuote = false;
-  const len = text.length;
-
-  for (let i = 0; i < len; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (inQuote) {
-      if (ch === '"' && next === '"') {
-        field += '"';
-        i++;
-      } else if (ch === '"') {
-        inQuote = false;
-      } else {
-        field += ch;
-      }
-    } else {
+function parseCSVGrid(text: string): string[][] {
+  const grid: string[][] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (!line) continue;
+    const cells: string[] = [];
+    let inQuote = false;
+    let cur = "";
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
       if (ch === '"') {
-        inQuote = true;
-      } else if (ch === ",") {
-        row.push(field);
-        field = "";
-      } else if (ch === "\r" && next === "\n") {
-        row.push(field);
-        field = "";
-        rows.push(row);
-        row = [];
-        i++;
-      } else if (ch === "\n" || ch === "\r") {
-        row.push(field);
-        field = "";
-        rows.push(row);
-        row = [];
+        if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuote = !inQuote;
+      } else if (ch === "," && !inQuote) {
+        cells.push(cur.trim());
+        cur = "";
       } else {
-        field += ch;
+        cur += ch;
       }
     }
+    cells.push(cur.trim());
+    if (cells.some((c) => c)) grid.push(cells);
   }
-  // last field / row
-  if (field || row.length > 0) {
-    row.push(field);
-    if (row.some((f) => f.trim())) rows.push(row);
-  }
-
-  return rows;
+  return grid;
 }
 
 export async function parseCSVBuffer(buffer: Buffer): Promise<ImportPreview> {
-  const text = buffer.toString("utf-8");
-  const allRows = parseCSV(text).filter((r) => r.some((f) => f.trim()));
-
-  if (allRows.length < 2) {
-    return { rows: [], clubs: [], categories: [], totalTeams: 0, warnings: ["El archivo CSV está vacío o sólo tiene encabezados."] };
+  const text = buffer.toString("utf-8").trim();
+  if (!text) {
+    return { rows: [], clubs: [], categories: [], totalTeams: 0, warnings: ["El archivo CSV está vacío."] };
   }
 
-  const headers = allRows[0].map((h) => h.trim());
-  const colClub = findCol(headers, CLUB_ALIASES);
-  const colTeam = findCol(headers, TEAM_ALIASES);
-  const colCat = findCol(headers, CATEGORY_ALIASES);
-  const colColor = findCol(headers, COLOR_ALIASES);
-  const colStatus = findCol(headers, STATUS_ALIASES);
-
-  const warnings: string[] = [];
-
-  if (colClub === -1 || colTeam === -1 || colCat === -1) {
-    warnings.push(`No se encontraron columnas requeridas. Encabezados: ${headers.join(", ")}. Se esperan: Club, Equipo, Categoría.`);
-    return { rows: [], clubs: [], categories: [], totalTeams: 0, warnings };
+  const grid = parseCSVGrid(text);
+  if (grid.length === 0) {
+    return { rows: [], clubs: [], categories: [], totalTeams: 0, warnings: ["El CSV no contiene datos válidos."] };
   }
 
-  const rows: ParsedTeamRow[] = [];
-
-  for (let i = 1; i < allRows.length; i++) {
-    const r = allRows[i];
-    const clubName = (r[colClub] ?? "").trim();
-    const teamName = (r[colTeam] ?? "").trim();
-    const categoryName = (r[colCat] ?? "").trim();
-    const color = colColor !== -1 ? (r[colColor] ?? "").trim() || null : null;
-
-    if (!clubName && !teamName && !categoryName) continue;
-    if (!clubName) { warnings.push(`Fila ${i + 1}: nombre de club vacío — omitida.`); continue; }
-    if (!teamName) { warnings.push(`Fila ${i + 1}: nombre de equipo vacío — omitida.`); continue; }
-    if (!categoryName) { warnings.push(`Fila ${i + 1}: categoría vacía — omitida.`); continue; }
-
-    rows.push({ clubName, teamName, categoryName, categoryColor: color });
+  let preview: ImportPreview;
+  if (isColumnLayout(grid)) {
+    const { rows, warnings } = parseColumnLayout(grid);
+    preview = rowsToPreview(rows, warnings);
+  } else {
+    const tableText = grid.map((r) => r.join("\t")).join("\n");
+    const aiResult = await aiExtractFromTableText(tableText);
+    preview = aiResultToPreview(aiResult);
   }
 
-  const clubs = [...new Set(rows.map((r) => r.clubName))];
-  const catMap = new Map<string, string | null>();
-  for (const r of rows) {
-    if (!catMap.has(r.categoryName)) catMap.set(r.categoryName, r.categoryColor);
-  }
-  const categories = [...catMap.entries()].map(([name, color]) => ({ name, color }));
+  const canonicalRows = await canonicalizeClubNames(preview.rows);
+  const clubs = [...new Set(canonicalRows.map((r) => r.clubName))];
 
-  return { rows, clubs, categories, totalTeams: rows.length, warnings };
+  return { ...preview, rows: canonicalRows, clubs };
 }

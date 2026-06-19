@@ -1,4 +1,7 @@
 import ExcelJS from "exceljs";
+import { canonicalizeClubNames } from "./ai-extractor";
+import { isColumnLayout, parseColumnLayout, rowsToPreview } from "./column-layout";
+import { aiExtractFromTableText, aiResultToPreview } from "./ai-extractor";
 
 export type ParsedTeamRow = {
   clubName: string;
@@ -15,23 +18,6 @@ export type ImportPreview = {
   warnings: string[];
 };
 
-const CLUB_ALIASES = ["club", "club name", "nombre club"];
-const TEAM_ALIASES = ["equipo", "team", "team name", "nombre equipo"];
-const CATEGORY_ALIASES = ["categoría", "categoria", "category", "cat"];
-const COLOR_ALIASES = ["color", "colour", "color hex", "hex"];
-
-function normalize(s: string) {
-  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
-}
-
-function findCol(headers: string[], aliases: string[]): number {
-  for (const alias of aliases) {
-    const idx = headers.findIndex((h) => normalize(h) === alias);
-    if (idx !== -1) return idx;
-  }
-  return -1;
-}
-
 function cellStr(cell: ExcelJS.Cell): string {
   const v = cell.value;
   if (v === null || v === undefined) return "";
@@ -46,57 +32,42 @@ export async function parseExcelBuffer(buffer: Buffer): Promise<ImportPreview> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await workbook.xlsx.load(buffer as any);
 
-  const warnings: string[] = [];
-  const rows: ParsedTeamRow[] = [];
-
-  // Try first sheet
   const sheet = workbook.worksheets[0];
   if (!sheet) {
     return { rows: [], clubs: [], categories: [], totalTeams: 0, warnings: ["El archivo no contiene hojas de cálculo."] };
   }
 
-  // Find header row (first row with content in column A)
-  const headerRow = sheet.getRow(1);
-  const headers: string[] = [];
-  headerRow.eachCell({ includeEmpty: true }, (cell) => {
-    headers.push(cellStr(cell));
+  // Build a 2D grid (rows × cols) from the sheet
+  const grid: string[][] = [];
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    const cells: string[] = [];
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cells.push(cellStr(cell));
+    });
+    if (cells.some((c) => c)) grid.push(cells);
   });
 
-  const colClub = findCol(headers, CLUB_ALIASES);
-  const colTeam = findCol(headers, TEAM_ALIASES);
-  const colCat = findCol(headers, CATEGORY_ALIASES);
-  const colColor = findCol(headers, COLOR_ALIASES);
-
-  if (colClub === -1 || colTeam === -1 || colCat === -1) {
-    warnings.push(`No se encontraron columnas requeridas. Encabezados detectados: ${headers.join(", ")}. Se esperan: Club, Equipo, Categoría.`);
-    return { rows: [], clubs: [], categories: [], totalTeams: 0, warnings };
+  if (grid.length === 0) {
+    return { rows: [], clubs: [], categories: [], totalTeams: 0, warnings: ["El archivo está vacío."] };
   }
 
-  sheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return; // skip header
-    const clubName = cellStr(row.getCell(colClub + 1));
-    const teamName = cellStr(row.getCell(colTeam + 1));
-    const categoryName = cellStr(row.getCell(colCat + 1));
-    const color = colColor !== -1 ? cellStr(row.getCell(colColor + 1)) || null : null;
-
-    if (!clubName && !teamName && !categoryName) return; // empty row
-
-    if (!clubName) { warnings.push(`Fila ${rowNumber}: nombre de club vacío — omitida.`); return; }
-    if (!teamName) { warnings.push(`Fila ${rowNumber}: nombre de equipo vacío — omitida.`); return; }
-    if (!categoryName) { warnings.push(`Fila ${rowNumber}: categoría vacía — omitida.`); return; }
-
-    rows.push({ clubName, teamName, categoryName, categoryColor: color });
-  });
-
-  // Deduplicate clubs and categories
-  const clubs = [...new Set(rows.map((r) => r.clubName))];
-  const catMap = new Map<string, string | null>();
-  for (const r of rows) {
-    if (!catMap.has(r.categoryName)) catMap.set(r.categoryName, r.categoryColor);
+  let preview: ImportPreview;
+  if (isColumnLayout(grid)) {
+    // Fast deterministic path — no AI needed for extraction
+    const { rows, warnings } = parseColumnLayout(grid);
+    preview = rowsToPreview(rows, warnings);
+  } else {
+    // Row-per-team layout — delegate to AI
+    const tableText = grid.map((r) => r.join("\t")).join("\n");
+    const aiResult = await aiExtractFromTableText(tableText);
+    preview = aiResultToPreview(aiResult);
   }
-  const categories = [...catMap.entries()].map(([name, color]) => ({ name, color }));
 
-  return { rows, clubs, categories, totalTeams: rows.length, warnings };
+  // AI canonicalization: normalize club name variants across categories
+  const canonicalRows = await canonicalizeClubNames(preview.rows);
+  const clubs = [...new Set(canonicalRows.map((r) => r.clubName))];
+
+  return { ...preview, rows: canonicalRows, clubs };
 }
 
 export function generateExcelTemplate(): Promise<Buffer> {
