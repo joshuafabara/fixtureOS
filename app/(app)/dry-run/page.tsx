@@ -2,6 +2,7 @@ import { requireOrg } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import { dryRuns, tournaments, categories } from "@/lib/db/schema";
 import { eq, and, desc, count } from "drizzle-orm";
+import { cookies } from "next/headers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Zap, ChevronRight, AlertTriangle } from "lucide-react";
@@ -18,28 +19,35 @@ const STATUS_LABELS: Record<string, string> = {
 
 export default async function DryRunListPage() {
   const orgId = await requireOrg();
+  const activeTournamentId = cookies().get("activeTournamentId")?.value ?? null;
 
-  const runs = await db
-    .select({
-      id: dryRuns.id,
-      status: dryRuns.status,
-      reason: dryRuns.reason,
-      createdAt: dryRuns.createdAt,
-      tournamentName: tournaments.name,
-      summary: dryRuns.summary,
-    })
-    .from(dryRuns)
-    .leftJoin(tournaments, eq(dryRuns.tournamentId, tournaments.id))
-    .where(eq(dryRuns.organizationId, orgId))
-    .orderBy(desc(dryRuns.createdAt))
-    .limit(20);
+  const [allTournaments, runs] = await Promise.all([
+    db
+      .select({ id: tournaments.id, name: tournaments.name, status: tournaments.status })
+      .from(tournaments)
+      .where(eq(tournaments.organizationId, orgId)),
+    db
+      .select({
+        id: dryRuns.id,
+        status: dryRuns.status,
+        reason: dryRuns.reason,
+        createdAt: dryRuns.createdAt,
+        tournamentName: tournaments.name,
+        summary: dryRuns.summary,
+      })
+      .from(dryRuns)
+      .leftJoin(tournaments, eq(dryRuns.tournamentId, tournaments.id))
+      .where(eq(dryRuns.organizationId, orgId))
+      .orderBy(desc(dryRuns.createdAt))
+      .limit(20),
+  ]);
 
-  // Get active tournament for generate button
-  const [activeTournament] = await db
-    .select({ id: tournaments.id, name: tournaments.name })
-    .from(tournaments)
-    .where(and(eq(tournaments.organizationId, orgId), eq(tournaments.status, "active")))
-    .limit(1);
+  // Honour the picker cookie — same priority order as the layout
+  const activeTournament =
+    allTournaments.find((t) => t.id === activeTournamentId) ??
+    allTournaments.find((t) => t.status === "active") ??
+    allTournaments[0] ??
+    null;
 
   // Count eligible categories for the active tournament
   let eligibleCount = 0;
