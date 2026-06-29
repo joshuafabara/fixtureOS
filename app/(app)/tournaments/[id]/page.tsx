@@ -96,7 +96,7 @@ export default async function TournamentDetailPage({
             </Link>
           </Button>
           <Button size="sm" asChild>
-            <Link href={`/fixture/${tournament.id}/edit`}>
+            <Link href="/dry-run">
               <Zap className="h-4 w-4" /> Generar dry run
             </Link>
           </Button>
@@ -226,7 +226,7 @@ export default async function TournamentDetailPage({
                   </Link>
                 </Button>
                 <Button variant="outline" asChild>
-                  <Link href={`/fixture-builder`}>
+                  <Link href={`/fixture/${tournament.id}`}>
                     <Zap className="h-4 w-4" /> Constructor
                   </Link>
                 </Button>
